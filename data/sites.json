@@ -1,0 +1,20 @@
+[
+  {
+    "name": "HelloWork",
+    "url": "https://www.hellowork.com/fr-fr/emploi/recherche.html?k=data+scientist&l=Ile-de-France",
+    "color": "#00b3a4",
+    "short": "HW"
+  },
+  {
+    "name": "Welcome to the Jungle",
+    "url": "https://www.welcometothejungle.com/fr/jobs?query=data%20scientist&aroundQuery=Ile-de-France",
+    "color": "#ff5a5f",
+    "short": "WTTJ"
+  },
+  {
+    "name": "LinkedIn",
+    "url": "https://www.linkedin.com/jobs/search/?keywords=Data%20Scientist&location=%C3%8Ele-de-France%2C%20France&f_TPR=r604800&f_E=1%2C2",
+    "color": "#0a66c2",
+    "short": "in"
+  }
+]

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Candidatures — Paul</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%235b8def'/><path d='M9 10h14M9 16h10M9 22h12' stroke='white' stroke-width='2.4' stroke-linecap='round'/></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>Candidatures</h1>
+  </div>
+
+  <nav class="views" id="nav">
+    <a href="#/nouvelles" data-view="new">Nouvelles<span class="badge" id="badgeNew">0</span></a>
+    <a href="#/candidatures" data-view="pipeline">Suivi</a>
+  </nav>
+
+  <div class="spacer"></div>
+  <div class="stats" id="stats"></div>
+  <div class="search">
+    <span class="loupe">⌕</span>
+    <input id="q" placeholder="filtrer titre, entreprise, ville…" autocomplete="off">
+  </div>
+  <button class="btn icon" id="refresh" title="Relire inbox.jsonl et rafraîchir">↻</button>
+  <button class="btn primary" id="add">+ Offre</button>
+</header>
+
+<main>
+  <section class="view" id="viewNew" hidden>
+    <div class="toolbar">
+      <div class="toolbar-title">
+        <h2>Nouvelles offres</h2>
+        <span class="hint" id="newHint">triées par score, les plus récentes d'abord</span>
+      </div>
+      <div class="sources" id="sources" title="Chercher à la main sur les job boards"></div>
+    </div>
+    <div class="grid" id="gridNew"></div>
+  </section>
+
+  <section class="view" id="viewPipeline" hidden>
+    <div class="toolbar">
+      <div class="toolbar-title">
+        <h2>Candidatures en cours</h2>
+        <span class="hint">glisse une carte pour changer d'étape</span>
+      </div>
+    </div>
+    <div class="board" id="board"></div>
+  </section>
+</main>
+
+<div class="drawer-wrap" id="drawerWrap">
+  <div class="drawer">
+    <div class="drawer-head">
+      <div class="row">
+        <div style="flex:1">
+          <h2 id="dTitle">—</h2>
+          <div class="sub" id="dSub"></div>
+        </div>
+        <button class="close" id="dClose" aria-label="fermer">×</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="dBody"></div>
+  </div>
+</div>
+
+<div class="modal-wrap" id="modalWrap">
+  <div class="modal">
+    <h2>Ajouter une offre</h2>
+    <p class="modal-hint">Le texte de l'offre sert à la recherche entreprise et à l'adaptation :
+      colle-le, une URL seule ne suffit pas.</p>
+    <div class="grid2">
+      <label class="f">Intitulé du poste *<input type="text" id="fTitle" placeholder="Data Scientist"></label>
+      <label class="f">Entreprise<input type="text" id="fCompany" placeholder="Allphins"></label>
+      <label class="f">Lieu<input type="text" id="fLocation" placeholder="Paris"></label>
+      <label class="f">Contrat<input type="text" id="fContract" placeholder="CDI"></label>
+    </div>
+    <label class="f">URL de l'offre<input type="text" id="fUrl" placeholder="https://…"></label>
+    <label class="f">Texte de l'offre
+      <textarea id="fDesc" style="min-height:170px"></textarea>
+    </label>
+    <div class="row-end">
+      <button class="btn ghost" id="mCancel">Annuler</button>
+      <button class="btn primary" id="mSave">Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

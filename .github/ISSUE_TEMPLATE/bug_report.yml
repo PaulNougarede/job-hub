@@ -1,0 +1,52 @@
+name: Bug
+description: Quelque chose ne se comporte pas comme prévu
+title: "[bug] "
+labels: ["type:bug", "prio:moyenne"]
+body:
+  - type: textarea
+    id: constat
+    attributes:
+      label: Constat
+      description: Ce qui se passe réellement. Colle le message d'erreur ou l'extrait de log.
+      placeholder: "Ex. : la carte reste en 'running' après un run réussi."
+    validations:
+      required: true
+
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Comportement attendu
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Étapes de reproduction
+      placeholder: |
+        1. Ouvrir http://…:8765
+        2. Cliquer sur …
+        3. Observer …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: zone
+    attributes:
+      label: Zone
+      options:
+        - back (API FastAPI)
+        - front (board static/)
+        - worker (adaptation CV + LM)
+        - ingest (import inbox.jsonl / historique)
+        - infra / CI
+    validations:
+      required: true
+
+  - type: textarea
+    id: contexte
+    attributes:
+      label: Contexte
+      description: Depuis quand, dans quelles conditions, ce qui a changé récemment.
+    validations:
+      required: false
