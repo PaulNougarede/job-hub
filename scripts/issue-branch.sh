@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Crée et pousse la branche de travail d'une issue.
+# Crée la branche de travail d'une issue (ne la pousse pas).
 #   scripts/issue-branch.sh 12
 set -euo pipefail
 
-num="${1:?usage: scripts/issue-branch.sh <numéro d'issue>}"
+num="${1:?usage: scripts/issue-branch.sh <numéro>}"
 cd "$(git rev-parse --show-toplevel)"
 
 title=$(gh issue view "$num" --json title --jq .title)
