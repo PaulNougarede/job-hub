@@ -1,0 +1,46 @@
+name: Fonctionnalité
+description: Une amélioration ou un nouveau comportement à ajouter
+title: "[feat] "
+labels: ["type:feature", "prio:moyenne"]
+body:
+  - type: textarea
+    id: besoin
+    attributes:
+      label: Besoin
+      description: Le problème d'usage à résoudre, du point de vue de l'utilisateur.
+      placeholder: "Ex. : je n'ai aucun moyen de savoir si hub.db est sauvegardé."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solution envisagée
+      description: L'approche pressentie (facultatif, à discuter).
+    validations:
+      required: false
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Critères de done
+      description: Ce qui doit être vrai pour fermer l'issue.
+      placeholder: |
+        - [ ] …
+        - [ ] tests à jour
+        - [ ] README à jour
+    validations:
+      required: true
+
+  - type: dropdown
+    id: zone
+    attributes:
+      label: Zone
+      options:
+        - back (API FastAPI)
+        - front (board static/)
+        - worker (adaptation CV + LM)
+        - ingest (import inbox.jsonl / historique)
+        - infra / CI
+    validations:
+      required: true

@@ -1,0 +1,21 @@
+# Environnement Python local
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Données personnelles : jamais versionnées
+data/hub.db
+data/hub.db-wal
+data/hub.db-shm
+data/hub-*.db
+data/prompts/
+logs/
+*.log
+
+# Secrets / config locale
+.env
+.env.*
+
+# Divers
+.DS_Store

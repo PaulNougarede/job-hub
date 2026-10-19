@@ -1,0 +1,128 @@
+"""Tests du hub : ingestion, dédoublonnage, statuts, chemins de fichiers.
+
+    ./.venv/bin/python tests/test_hub.py     # ou python3 -m pytest tests/
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+# Une base jetable AVANT d'importer db (DB_PATH lu à l'import).
+tmp = tempfile.mkdtemp(prefix="hubtest_")
+os.environ["HUB_DB"] = str(Path(tmp) / "test.db")
+
+import db  # noqa: E402
+import ingest  # noqa: E402
+
+PASS = 0
+
+
+def check(cond, label):
+    global PASS
+    if not cond:
+        raise AssertionError(label)
+    PASS += 1
+    print(f"ok  {label}")
+
+
+def test_schema():
+    db.init_db()
+    with db.conn() as c:
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    check({"offers", "runs", "events"} <= tables, "schéma créé")
+
+
+def test_norm_variants():
+    a = ingest._norm({"link": "http://x", "poste": "Data Scientist", "entreprise": "ACME",
+                      "match": "82/100", "skills": "Python, RAG", "missing": "Airflow"})
+    check(a["url"] == "http://x" and a["title"] == "Data Scientist" and a["score"] == 82,
+          "variantes de champs reconnues")
+    check(a["matched"] == ["Python", "RAG"] and a["gaps"] == ["Airflow"],
+          "listes séparées par des virgules")
+
+
+def test_upsert_dedup():
+    oid, created = db.upsert_offer({"url": "http://job/1", "title": "Data Scientist",
+                                    "company": "ACME", "score": 70, "matched": ["Python"]})
+    check(created, "première insertion")
+    oid2, created2 = db.upsert_offer({"url": "http://job/1", "title": "Data Scientist",
+                                      "company": "ACME", "description": "texte complet"})
+    check(not created2 and oid2 == oid, "même URL = même carte")
+    with db.conn() as c:
+        row = c.execute("SELECT * FROM offers WHERE id=?", (oid,)).fetchone()
+    check(row["description"] == "texte complet", "les trous sont complétés")
+    check(row["score"] == 70, "une valeur existante n'est pas écrasée")
+
+
+def test_status_flow():
+    with db.conn() as c:
+        row = c.execute("SELECT id FROM offers LIMIT 1").fetchone()
+        oid = row["id"]
+        db.set_status(c, oid, "shortlist")
+        db.set_status(c, oid, "applied")
+        r = c.execute("SELECT status, applied_at FROM offers WHERE id=?", (oid,)).fetchone()
+        ev = c.execute("SELECT COUNT(*) FROM events WHERE offer_id=?", (oid,)).fetchone()[0]
+    check(r["status"] == "applied" and r["applied_at"], "statut + date de candidature")
+    check(ev >= 3, "chaque transition laisse un événement")
+    try:
+        with db.conn() as c:
+            db.set_status(c, oid, "nimportequoi")
+        raise AssertionError("statut inconnu accepté")
+    except ValueError:
+        check(True, "statut inconnu refusé")
+
+
+def test_inbox_ingest():
+    inbox = Path(tmp) / "inbox.jsonl"
+    rows = [
+        {"url": "http://job/2", "title": "ML Engineer", "company": "Beta", "score": 75,
+         "matched": ["PyTorch"], "gaps": [], "description": "d", "source": "adzuna"},
+        {"title": "sans url", "company": "Gamma"},          # accepté (offre manuelle)
+        {"url": "http://job/2", "title": "ML Engineer"},     # doublon
+        {"ceci": "n'est pas une offre"},                     # ignoré (pas de titre)
+        "ligne cassée",
+    ]
+    inbox.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    old = ingest.INBOX
+    ingest.INBOX = inbox
+    try:
+        stats = ingest.ingest_inbox()
+    finally:
+        ingest.INBOX = old
+    check(stats["created"] == 2 and stats["errors"] == 1, f"comptage inbox: {stats}")
+    check(stats["read"] == 4, "les lignes non-JSON sont ignorées sans casser")
+
+
+def test_tombstone():
+    """Une offre supprimée ne doit pas revenir par l'import automatique."""
+    with db.conn() as c:
+        c.execute("INSERT OR IGNORE INTO dismissed (url, at) VALUES ('http://job/3', '2026-01-01')")
+    oid, created = db.upsert_offer({"url": "http://job/3", "title": "Offre supprimée"})
+    check(oid is None and not created, "import auto : URL supprimée ignorée")
+    oid2, created2 = db.upsert_offer({"url": "http://job/3", "title": "Offre rétablie à la main"},
+                                     respect_dismissed=False)
+    check(oid2 is not None and created2, "ajout manuel : la pierre tombale est levée")
+    with db.conn() as c:
+        left = c.execute("SELECT COUNT(*) FROM dismissed WHERE url='http://job/3'").fetchone()[0]
+    check(left == 0, "pierre tombale supprimée après ajout manuel")
+
+
+def test_file_guard():
+    """Le service de fichiers ne doit jamais sortir de cv-tailor/output."""
+    root = Path("/home/user/cv-tailor/output").resolve()
+    for probe in ("../data/hub.db", "../../job-hub/data/hub.db", "/etc/passwd"):
+        target = (root / probe).resolve()
+        check(not target.is_relative_to(root), f"chemin bloqué: {probe}")
+
+
+if __name__ == "__main__":
+    for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
+               test_inbox_ingest, test_tombstone, test_file_guard):
+        fn()
+    print(f"\nALL TESTS PASSED ({PASS} vérifications)")
