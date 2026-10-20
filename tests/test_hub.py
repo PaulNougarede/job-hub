@@ -113,6 +113,25 @@ def test_tombstone():
     check(left == 0, "pierre tombale supprimée après ajout manuel")
 
 
+def test_delete_offer():
+    """Supprimer une offre pose une pierre tombale : elle ne revient pas."""
+    oid, created = db.upsert_offer({"url": "http://job/supprimee", "title": "À supprimer"})
+    assert oid is not None and created
+    check(db.delete_offer(oid) is True, "suppression : URL retenue (tombstone)")
+    with db.conn() as c:
+        gone = c.execute("SELECT COUNT(*) FROM offers WHERE id=?", (oid,)).fetchone()[0]
+        tomb = c.execute("SELECT COUNT(*) FROM dismissed WHERE url='http://job/supprimee'").fetchone()[0]
+    check(gone == 0, "offre absente de la base")
+    check(tomb == 1, "URL dans dismissed")
+    oid2, created = db.upsert_offer({"url": "http://job/supprimee", "title": "Réimport"})
+    check(oid2 is None and not created, "import auto : offre supprimée non récréée")
+    try:
+        db.delete_offer(999999)
+        check(False, "suppression d'une offre inconnue doit lever KeyError")
+    except KeyError:
+        check(True, "offre inconnue → KeyError")
+
+
 def test_file_guard():
     """Le service de fichiers ne doit jamais sortir de cv-tailor/output."""
     root = Path("/home/paul/cv-tailor/output").resolve()
@@ -123,6 +142,6 @@ def test_file_guard():
 
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
-               test_inbox_ingest, test_tombstone, test_file_guard):
+               test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
