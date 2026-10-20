@@ -191,15 +191,11 @@ def patch_offer(oid: int, payload: OfferPatch):
 def delete_offer(oid: int):
     """Supprime la carte ET retient l'URL : sans ça, le prochain import la
     recrée et elle réapparaît dans « Nouvelles offres »."""
-    with db.conn() as c:
-        r = c.execute("SELECT url FROM offers WHERE id = ?", (oid,)).fetchone()
-        if not r:
-            raise HTTPException(404, "offre inconnue")
-        if r["url"]:
-            c.execute("INSERT OR IGNORE INTO dismissed (url, at) VALUES (?, ?)",
-                      (r["url"], db.now()))
-        c.execute("DELETE FROM offers WHERE id = ?", (oid,))
-    return {"ok": True, "dismissed": bool(r["url"])}
+    try:
+        dismissed = db.delete_offer(oid)
+    except KeyError:
+        raise HTTPException(404, "offre inconnue")
+    return {"ok": True, "dismissed": dismissed}
 
 
 @app.post("/api/offers/{oid}/tailor")

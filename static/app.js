@@ -170,7 +170,7 @@ function cardNew(o) {
         ${busy ? 'en cours…' : '⚡ Adapter CV + LM'}
       </button>
       <button class="btn small keep" data-act="keep" title="Garder pour postuler">✓</button>
-      <button class="btn small drop" data-act="drop" title="Écarter">✕</button>
+      <button class="btn small drop" data-act="drop" title="Supprimer l’offre">✕</button>
       <span class="spacer"></span>
       ${o.url ? `<a class="btn small ghost" href="${esc(o.url)}" target="_blank" rel="noopener"
                   data-act="link">offre ↗</a>` : ''}
@@ -221,7 +221,7 @@ function renderNew() {
         const a = act.dataset.act;
         if (a === 'adapt') return tailor(id);
         if (a === 'keep') return move(id, 'shortlist', 'Ajoutée au suivi → À postuler');
-        if (a === 'drop') return move(id, 'rejected', 'Écartée');
+        if (a === 'drop') return deleteOffer(id);
         return; // link : laisser le navigateur suivre
       }
       openDrawer(id);
@@ -275,6 +275,24 @@ async function move(id, status, msg) {
   });
   if (!r.ok) toast('Changement de statut échoué');
   else if (msg) toast(msg);
+  load(true);
+}
+
+/* La croix des « Nouvelles offres » supprime : une offre qu'on ne veut pas
+   n'est pas un refus (la colonne Refusé = candidature qui n'a pas abouti). */
+async function deleteOffer(id) {
+  const o = state.offers.find((x) => x.id === id);
+  if (!o) return;
+  const ok = confirm('Supprimer « ' + o.title + ' » du hub ?\n\n'
+    + 'Elle disparaît et ne sera plus réimportée par le cron.\n'
+    + 'Pour noter un refus, passez-la dans le suivi puis glissez-la en Refusé.');
+  if (!ok) return;
+  const r = await fetch('/api/offers/' + id, { method: 'DELETE' });
+  if (!r.ok) { toast('Suppression impossible'); return; }
+  state.offers = state.offers.filter((x) => x.id !== id);
+  if (state.openId === id) closeDrawer();
+  render();
+  toast('Offre supprimée');
   load(true);
 }
 

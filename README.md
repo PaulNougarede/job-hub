@@ -58,11 +58,14 @@ run n'est `running` avant un restart.
 
 - **#/nouvelles** — les offres fraîches, en grille, triées par score. Chaque carte
   porte trois actions : `⚡ Adapter CV + LM`, `✓` (la faire passer dans le suivi),
-  `✕` (l'écarter). Les job boards (HelloWork, Welcome to the Jungle, LinkedIn)
-  sont en haut à droite : `data/sites.json` contient leurs URLs de recherche,
-  éditable à la main.
+  `✕` (la supprimer — elle ne revient pas par le cron). Les job boards (HelloWork,
+  Welcome to the Jungle, LinkedIn) sont en haut à droite : `data/sites.json`
+  contient leurs URLs de recherche, éditable à la main.
 - **#/candidatures** — le pipeline en 5 colonnes (À postuler → Postulé →
-  Entretien → Refusé → Offre), glisser-déposer pour changer d'étape.
+  Entretien → Refusé → Offre), glisser-déposer pour changer d'étape. La colonne
+  Refusé ne contient que les candidatures qui n'ont pas abouti : une offre qu'on
+  ne veut pas se supprime depuis #/nouvelles, elle ne passe jamais en Refusé
+  toute seule.
 
 Une offre « gardée » quitte la page Nouvelles : c'est le geste qui dit « je la
 traite », pas une alerte à ne pas perdre.

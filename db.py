@@ -212,6 +212,23 @@ def set_status(c: sqlite3.Connection, offer_id: int, status: str, message: str =
         log_event(c, offer_id, "status", message or f"{row['status']} → {status}")
 
 
+def delete_offer(oid: int) -> bool:
+    """Supprime une offre ET retient son URL (pierre tombale).
+
+    Sans la tombe, le prochain import automatique recrée la carte. Retourne
+    True si une URL a été retenue ; lève KeyError si l'offre n'existe pas.
+    """
+    with conn() as c:
+        r = c.execute("SELECT url FROM offers WHERE id = ?", (oid,)).fetchone()
+        if not r:
+            raise KeyError(oid)
+        if r["url"]:
+            c.execute("INSERT OR IGNORE INTO dismissed (url, at) VALUES (?, ?)",
+                      (r["url"], now()))
+        c.execute("DELETE FROM offers WHERE id = ?", (oid,))
+    return bool(r["url"])
+
+
 def latest_run(c: sqlite3.Connection, offer_id: int) -> dict | None:
     r = c.execute(
         "SELECT * FROM runs WHERE offer_id = ? ORDER BY id DESC LIMIT 1", (offer_id,)
