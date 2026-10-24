@@ -125,7 +125,7 @@ function renderSources() {
   if (!el) return;
   el.innerHTML = state.sites.map((s) => `
     <a class="source" href="${esc(s.url)}" target="_blank" rel="noopener" title="Chercher sur ${esc(s.name)}">
-      <span class="sq" style="background:${esc(s.color || '#5b8def')}">${esc(s.short || s.name[0])}</span>
+      <span class="sq" style="background:${esc(s.color || '#b98cf0')}">${esc(s.short || s.name[0])}</span>
       ${esc(s.name)}<span class="ext">↗</span>
     </a>`).join('');
 }
@@ -352,13 +352,13 @@ function renderDrawer(o) {
       }).join('');
     const m = run.manifest || {};
     const summary = m.company_summary
-      ? `<p style="font-size:12.5px;color:#b9c4d4;margin:12px 0 0;line-height:1.6">${esc(m.company_summary)}</p>` : '';
+      ? `<p style="font-size:12.5px;color:var(--muted);margin:12px 0 0;line-height:1.6">${esc(m.company_summary)}</p>` : '';
     const adapted = (m.adapted || []).length
       ? `<div class="chips" style="margin-top:10px">${m.adapted.map((a) => `<span class="chip">${esc(a)}</span>`).join('')}</div>` : '';
     runHtml = `
       <div class="runbox" style="margin-top:11px">
         <div class="state">
-          ${busy ? '<span class="dot" style="color:#e3b341"></span>' : ''}
+          ${busy ? '<span class="dot" style="color:var(--warn)"></span>' : ''}
           <span>Run #${run.id} — ${esc(label)}</span>
         </div>
         ${run.error ? `<div style="color:var(--bad);font-size:12px;margin-top:7px">${esc(run.error)}</div>` : ''}
