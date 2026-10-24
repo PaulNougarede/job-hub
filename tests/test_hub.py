@@ -159,9 +159,20 @@ def test_pwa_icons():
         check(path.is_file(), f"manifeste : {entry['src']} présent")
 
 
+def test_theme_assets():
+    """Le thème « papier & crayon » a ses polices et son filtre SVG."""
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    for face in ("kalam-400.woff2", "kalam-700.woff2"):
+        check(face in css, f"@font-face déclare {face}")
+        check((ROOT / "static" / "fonts" / face).is_file(), f"police présente : {face}")
+    check('id="pencil"' in html, "filtre crayon #pencil défini dans index.html")
+    check("url(#pencil)" in css, "les contours utilisent le filtre crayon")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
-               test_pwa_icons):
+               test_pwa_icons, test_theme_assets):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
