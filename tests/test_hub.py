@@ -140,8 +140,28 @@ def test_file_guard():
         check(not target.is_relative_to(root), f"chemin bloqué: {probe}")
 
 
+def test_pwa_icons():
+    """L'icône du raccourci iPhone existe et est un PNG 180x180 opaque."""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    check('rel="apple-touch-icon"' in html, "index.html déclare apple-touch-icon")
+    href = html.split('rel="apple-touch-icon"')[1].split('href="')[1].split('"')[0]
+    icon = ROOT / href.lstrip("/")
+    check(icon.is_file(), f"icône présente sur le disque ({href})")
+    data = icon.read_bytes()
+    check(data[:8] == b"\x89PNG\r\n\x1a\n", "icône au format PNG")
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    check((width, height) == (180, 180), f"icône en 180x180 (={width}x{height})")
+    check(data[25] in (0, 2), "PNG sans canal alpha (iOS rend la transparence en noir)")
+    manifest = json.loads((ROOT / "static" / "manifest.json").read_text(encoding="utf-8"))
+    for entry in manifest["icons"]:
+        path = ROOT / entry["src"].lstrip("/")
+        check(path.is_file(), f"manifeste : {entry['src']} présent")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
-               test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard):
+               test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
+               test_pwa_icons):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
