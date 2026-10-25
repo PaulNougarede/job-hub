@@ -159,15 +159,38 @@ def test_pwa_icons():
         check(path.is_file(), f"manifeste : {entry['src']} présent")
 
 
+def _rule(css: str, selector: str) -> str:
+    """Corps de la première règle dont le sélecteur exact commence ainsi."""
+    idx = css.find(selector)
+    if idx < 0:
+        return ""
+    return css[idx:css.find("}", idx)]
+
+
 def test_theme_assets():
-    """Le thème « papier & crayon » a ses polices et son filtre SVG."""
+    """Charte « papier » sobre : une seule police, contours nets, pas de crayonné."""
     css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    for face in ("kalam-400.woff2", "kalam-700.woff2"):
+    for face in ("inter-latin.woff2", "inter-latin-ext.woff2"):
         check(face in css, f"@font-face déclare {face}")
         check((ROOT / "static" / "fonts" / face).is_file(), f"police présente : {face}")
-    check('id="pencil"' in html, "filtre crayon #pencil défini dans index.html")
-    check("url(#pencil)" in css, "les contours utilisent le filtre crayon")
+    check("kalam" not in css.lower(), "l'ancienne police manuscrite a disparu du CSS")
+    check("kalam" not in html.lower(), "l'ancienne police manuscrite a disparu du HTML")
+    check('id="pencil"' not in html, "le filtre crayon n'est plus défini")
+    check("url(#pencil)" not in css, "aucun contour filtré « crayon » restant")
+    check("--font-hand" not in css, "plus de famille manuscrite dans les tokens")
+
+    # la typographie unique s'applique à tous les champs textuels
+    check("--font-ui" in css, "token --font-ui défini")
+    check("var(--font-ui)" in _rule(css, "input, select, textarea, button"),
+          "champs de formulaire et boutons : var(--font-ui)")
+    fields = _rule(css, "select, textarea, input[type=text]")
+    check("font-family: var(--font-ui)" in fields, "select/textarea/input : var(--font-ui)")
+    check("var(--font-ui)" in _rule(css, ".search input"), "champ de recherche : var(--font-ui)")
+    for selector in (".brand h1", ".toolbar-title h2", ".col-head h2", ".card h3",
+                     ".drawer-head h2", ".modal h2"):
+        body = _rule(css, selector)
+        check(body and "font-family" not in body, f"{selector} hérite de la famille unique")
 
 
 if __name__ == "__main__":

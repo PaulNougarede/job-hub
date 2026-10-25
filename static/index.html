@@ -10,19 +10,10 @@
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#F4F1EA">
 <meta name="apple-mobile-web-app-title" content="Candidatures">
-<link rel="preload" href="/static/fonts/kalam-700.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/static/fonts/kalam-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-
-<!-- filtres « crayon » : distorsion des traits de contour, le texte reste net -->
-<svg class="svg-defs" width="0" height="0" aria-hidden="true" focusable="false">
-  <filter id="pencil" x="-6%" y="-6%" width="112%" height="112%" color-interpolation-filters="sRGB">
-    <feTurbulence type="fractalNoise" baseFrequency="0.018 0.034" numOctaves="3" seed="7" result="noise"/>
-    <feDisplacementMap in="SourceGraphic" in2="noise" scale="3" xChannelSelector="R" yChannelSelector="G"/>
-  </filter>
-</svg>
 
 <header>
   <div class="brand">
