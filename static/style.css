@@ -1,5 +1,5 @@
 /* ============================================================
-   Candidatures — charte « papier », version sobre
+   jobhunter — charte « papier », version sobre
    Palette dérivée du logo : bleu #62A3C7, rose #D47FA6,
    terracotta #E08A5E, jaune #E5D26D, sauge #9BB49D, gris #9FA8A3
    Typographie unique : Inter (variable, auto-hébergée)
@@ -119,16 +119,14 @@ header {
 }
 
 .brand { display: inline-flex; align-items: center; gap: 9px; }
-.brand::before {
-  content: "";
-  width: 17px; height: 17px; flex: none;
-  border-radius: 5px;
-  background: linear-gradient(135deg, var(--blue) 0 32%, var(--pink) 32% 56%, var(--terra) 56% 79%, var(--yellow) 79% 100%);
-  border: 1px solid var(--line-mid);
+.brand-mark {
+  display: block; flex: none;
+  width: 26px; height: 26px;
+  /* le logo est un disque : pas de cadre, il se pose sur le papier */
 }
 .brand h1 {
-  font-size: 16.5px; line-height: 1.2; margin: 0;
-  font-weight: 640; letter-spacing: -.012em; color: var(--ink);
+  font-size: 17px; line-height: 1.2; margin: 0;
+  font-weight: 620; letter-spacing: -.015em; color: var(--ink);
 }
 .spacer { flex: 1; }
 
