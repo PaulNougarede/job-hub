@@ -159,6 +159,36 @@ def test_pwa_icons():
         check(path.is_file(), f"manifeste : {entry['src']} présent")
 
 
+def test_branding():
+    """Nom de l'app et logo fourni : en-tête, favicon et manifeste."""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    manifest = json.loads((ROOT / "static" / "manifest.json").read_text(encoding="utf-8"))
+    check("<title>jobhunter</title>" in html, "titre de l'onglet = jobhunter")
+    check(manifest["name"] == "jobhunter" and manifest["short_name"] == "jobhunter",
+          "manifeste nommé jobhunter")
+    check('apple-mobile-web-app-title" content="jobhunter"' in html,
+          "titre du raccourci iOS = jobhunter")
+    check("<h1>jobhunter</h1>" in html, "marque de l'en-tête = jobhunter")
+    check("Candidatures — Paul" not in html, "l'ancien nom a disparu du HTML")
+    check("data:image/svg+xml" not in html, "plus de favicon SVG en data-URI")
+
+    # le logo fourni remplace la pastille dégradée
+    check(".brand::before" not in css, "la pastille dégradée a disparu du CSS")
+    check('class="brand-mark"' in html, "l'en-tête porte le logo en image")
+    src = html.split('class="brand-mark"')[1].split('src="')[1].split('"')[0]
+    check((ROOT / src.lstrip("/")).is_file(), f"logo de l'en-tête présent ({src})")
+
+    # chaque icône d'onglet existe sur le disque
+    icons = [chunk.split('href="')[1].split('"')[0]
+             for chunk in html.split('rel="icon"')[1:]]
+    check(icons, "index.html déclare au moins une icône")
+    for href in icons:
+        path = ROOT / href.lstrip("/")
+        check(path.is_file() and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n",
+              f"icône PNG présente ({href})")
+
+
 def _rule(css: str, selector: str) -> str:
     """Corps de la première règle dont le sélecteur exact commence ainsi."""
     idx = css.find(selector)
@@ -196,6 +226,6 @@ def test_theme_assets():
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
-               test_pwa_icons, test_theme_assets):
+               test_pwa_icons, test_branding, test_theme_assets):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
