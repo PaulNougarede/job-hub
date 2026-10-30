@@ -297,10 +297,26 @@ def test_health_redaction():
           "un message sans chemin reste intact")
 
 
+def test_worker_command():
+    """La commande de l'agent ne doit porter aucun `--source` (Hermes refuse les
+    sources inconnues de son gateway et le run échoue au démarrage)."""
+    import worker
+
+    cmd = worker.build_command(Path("/tmp/run_1.txt"))
+    check("--source" not in cmd, "aucun --source dans la commande de l'agent")
+    check(cmd[1:3] == ["chat", "--query-file"], f"commande inattendue : {cmd[:3]}")
+    for flag in ("--oneshot", "-s", "-t", "--in", "--run-budget"):
+        check(flag in cmd, f"{flag} présent")
+    check(cmd[cmd.index("-s") + 1] == "cv-application-tailor", "skill d'adaptation chargé")
+    check(cmd[cmd.index("-t") + 1] == "web,file,terminal", "toolsets attendus")
+    check(cmd[cmd.index("--in") + 1] == str(config.CV_TAILOR_DIR), "--in pointe sur cv-tailor")
+    check(worker.HERMES == config.HERMES_BIN, "binaire hermes issu de la config")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
                test_pwa_icons, test_branding, test_theme_assets, test_config_paths,
-               test_prompt_paths, test_health_redaction):
+               test_prompt_paths, test_health_redaction, test_worker_command):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

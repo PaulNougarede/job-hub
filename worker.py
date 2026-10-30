@@ -186,6 +186,21 @@ def _collect_files(out_dir: Path) -> dict:
     return out
 
 
+def build_command(prompt_path: Path) -> list[str]:
+    """Commande de l'agent pour un run d'adaptation.
+
+    Pas de `--source` : Hermes n'accepte que les sources annoncées par son
+    gateway (`cli`, `oneshot`…) et refuse les autres en échouant au démarrage.
+    Un run fini est déjà stocké `oneshot` par défaut, et le hub trace ses runs
+    dans sa propre table — un tag maison n'apporte rien et casse le run.
+    """
+    return [
+        HERMES, "chat", "--query-file", str(prompt_path), "--oneshot", "-v",
+        "-s", "cv-application-tailor", "-t", "web,file,terminal",
+        "--in", str(CV_TAILOR), "--run-budget", str(RUN_BUDGET),
+    ]
+
+
 def _run_one(run_row: dict) -> None:
     rid, offer_id = run_row["id"], run_row["offer_id"]
     with db.conn() as c:
@@ -200,12 +215,7 @@ def _run_one(run_row: dict) -> None:
     expected = CV_OUTPUT / dirname
     started = time.time()
 
-    cmd = [
-        HERMES, "chat", "--query-file", str(prompt_path), "--oneshot", "-v",
-        "-s", "cv-application-tailor", "-t", "web,file,terminal",
-        "--in", str(CV_TAILOR), "--run-budget", str(RUN_BUDGET),
-        "--source", "job-hub",
-    ]
+    cmd = build_command(prompt_path)
     ok, error = False, None
     try:
         with log_path.open("w", encoding="utf-8") as log:
