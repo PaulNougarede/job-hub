@@ -195,6 +195,10 @@ sqlite3 data/hub.db ".backup 'data/hub-$(date +%F).db'"
 - Un redémarrage pendant un run tue le run.
 - Les tests utilisent un lanceur maison plutôt que pytest.
 
+## Licence
+
+MIT — voir [LICENSE](LICENSE).
+
 ## Ce que ce projet m'a servi à travailler
 
 Une petite API FastAPI autour d'une base SQLite en WAL, une file de travail à un
