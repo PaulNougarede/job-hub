@@ -10,5 +10,5 @@ Closes #
 
 - [ ] `./.venv/bin/python tests/test_hub.py` passe en local
 - [ ] Aucun secret, `data/hub.db`, `logs/` ni `.venv/` dans le diff
-- [ ] README / CONTRIBUTING mis à jour si le comportement change
+- [ ] README mis à jour si le comportement change
 - [ ] La PR ne traite qu'une seule issue
