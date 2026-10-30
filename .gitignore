@@ -13,9 +13,10 @@ data/prompts/
 logs/
 *.log
 
-# Secrets / config locale
+# Secrets / config locale (le modèle versionné est explicitement ré-inclus)
 .env
 .env.*
+!.env.example
 
 # Divers
 .DS_Store

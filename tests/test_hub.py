@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 tmp = tempfile.mkdtemp(prefix="hubtest_")
 os.environ["HUB_DB"] = str(Path(tmp) / "test.db")
 
+import config  # noqa: E402
 import db  # noqa: E402
 import ingest  # noqa: E402
 
@@ -134,7 +136,7 @@ def test_delete_offer():
 
 def test_file_guard():
     """Le service de fichiers ne doit jamais sortir de cv-tailor/output."""
-    root = Path("/home/paul/cv-tailor/output").resolve()
+    root = config.CV_OUTPUT_DIR
     for probe in ("../data/hub.db", "../../job-hub/data/hub.db", "/etc/passwd"):
         target = (root / probe).resolve()
         check(not target.is_relative_to(root), f"chemin bloqué: {probe}")
@@ -223,9 +225,67 @@ def test_theme_assets():
         check(body and "font-family" not in body, f"{selector} hérite de la famille unique")
 
 
+def test_config_paths():
+    """Aucun chemin personnel en dur : tout passe par config.py + l'environnement."""
+    sources = ["app.py", "config.py", "db.py", "ingest.py", "worker.py",
+               "start.sh", "scripts/issue-branch.sh"]
+    offenders = []
+    for name in sources:
+        p = ROOT / name
+        if not p.is_file():
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if "/home/" in line or "/Users/" in line:
+                offenders.append(f"{name}:{i}")
+    check(not offenders, f"aucun chemin absolu de foyer en dur ({', '.join(offenders)})")
+
+    # Les valeurs par défaut sont calculées, jamais écrites : on les lit dans un
+    # sous-processus dont l'environnement ne porte aucun HUB_* (le bac à sable du
+    # test, lui, force HUB_DB).
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "CV_TAILOR", "CV_OUTPUT"))}
+    out = subprocess.run(
+        [sys.executable, "-c", "import json, config; print(json.dumps({"
+         "'db': str(config.DB_PATH), 'cv': str(config.CV_TAILOR_DIR), "
+         "'out': str(config.CV_OUTPUT_DIR), 'inbox': str(config.INBOX_PATH), "
+         "'sent': str(config.SENT_LOG_PATH)}))"],
+        cwd=str(ROOT), env=env, capture_output=True, text=True,
+    )
+    check(out.returncode == 0, f"config s'importe sans variable d'environnement ({out.stderr[-200:]})")
+    defaults = json.loads(out.stdout)
+    check(defaults["db"] == str((ROOT / "data" / "hub.db").resolve()), f"DB par défaut : {defaults['db']}")
+    check(defaults["cv"] == str((Path.home() / "cv-tailor").resolve()), f"cv-tailor par défaut : {defaults['cv']}")
+    check(defaults["out"] == str((Path(defaults["cv"]) / "output")), f"sortie sous cv-tailor : {defaults['out']}")
+    check(defaults["inbox"] == str((Path.home() / "job-hunter" / "inbox.jsonl").resolve()),
+          f"inbox par défaut : {defaults['inbox']}")
+    check(Path(defaults["sent"]).parent == Path(defaults["inbox"]).parent, "sent.jsonl à côté de l'inbox")
+
+    # Une valeur fournie par l'environnement gagne (HUB_DB du bac à sable).
+    check(config.DB_PATH == Path(os.environ["HUB_DB"]).resolve(), "HUB_DB surcharge la valeur par défaut")
+    check(config.ARCHIVE_EMAIL == os.environ.get("HUB_ARCHIVE_EMAIL", "").strip(),
+          "adresse d'archive lue dans l'environnement")
+
+
+def test_prompt_paths():
+    """Le prompt de l'agent ne contient plus ni chemin figé ni adresse en dur."""
+    import worker
+
+    prompt, dirname = worker.build_prompt({
+        "title": "Data Scientist", "company": "Acme", "url": "https://example.invalid/1",
+        "description": "d" * 300, "matched": ["Python"], "gaps": [],
+    })
+    check(str(config.CV_OUTPUT_DIR / dirname) in prompt, "dossier de sortie dérivé de la config")
+    check(prompt.count(str(config.CV_OUTPUT_DIR)) == 2,
+          "prompt : dossier + manifest, tous deux calculés (aucun chemin figé)")
+    check(config.OWNER_NAME in prompt, "propriétaire injecté depuis la config")
+    maille = "@" in prompt
+    check(maille == bool(config.ARCHIVE_EMAIL),
+          f"adresse d'archive seulement si configurée (mail={maille})")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
-               test_pwa_icons, test_branding, test_theme_assets):
+               test_pwa_icons, test_branding, test_theme_assets, test_config_paths,
+               test_prompt_paths):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

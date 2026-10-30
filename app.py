@@ -19,14 +19,15 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import config
 import db
 import ingest
 import worker
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
-CV_OUTPUT = Path("/home/paul/cv-tailor/output").resolve()
-INBOX = Path("/home/paul/job-hunter/inbox.jsonl")
+CV_OUTPUT = config.CV_OUTPUT_DIR
+INBOX = config.INBOX_PATH
 
 
 class OfferIn(BaseModel):
