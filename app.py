@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import time
+import traceback
 from pathlib import Path
 
 from contextlib import asynccontextmanager
@@ -132,7 +133,13 @@ def index():
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "db": str(db.DB_PATH), "cv_output": str(CV_OUTPUT)}
+    """Sonde de vie : ne divulgue aucun chemin absolu du serveur."""
+    return {
+        "ok": True,
+        "db": db.DB_PATH.name,
+        "db_ready": db.DB_PATH.exists(),
+        "cv_output_ready": CV_OUTPUT.is_dir(),
+    }
 
 
 @app.get("/api/board")
@@ -211,6 +218,8 @@ def tailor(oid: int):
 
 @app.get("/api/runs/{rid}/log")
 def run_log(rid: int, lines: int = 60):
+    """Dernières lignes du log d'un run (`lines` borné : la réponse lit un fichier)."""
+    lines = max(1, min(lines, 500))
     with db.conn() as c:
         r = c.execute("SELECT * FROM runs WHERE id = ?", (rid,)).fetchone()
         if not r:
@@ -245,6 +254,16 @@ def files(path: str):
     return FileResponse(target, filename=target.name)
 
 
+def _redact(text: str) -> str:
+    """Retire le chemin du foyer des messages renvoyés au client."""
+    home = str(Path.home())
+    return text.replace(home, "~") if home and home != "/" else text
+
+
 @app.exception_handler(Exception)
 async def _err(request: Request, exc: Exception):
-    return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=500)
+    # Trace complète côté serveur (journal systemd), message expurgé côté client.
+    traceback.print_exc()
+    return JSONResponse(
+        {"error": _redact(f"{type(exc).__name__}: {exc}")}, status_code=500
+    )
