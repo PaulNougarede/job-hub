@@ -282,10 +282,25 @@ def test_prompt_paths():
           f"adresse d'archive seulement si configurée (mail={maille})")
 
 
+def test_health_redaction():
+    """/api/health et les erreurs 500 ne doivent pas divulguer de chemin absolu."""
+    import app as app_module
+
+    payload = app_module.health()
+    check(payload["ok"] is True, "health répond ok")
+    check(all("/" not in str(v) for v in payload.values()), f"health sans chemin : {payload}")
+
+    home = str(Path.home())
+    check(app_module._redact(f"OSError: {home}/cv-tailor/x").endswith("~/cv-tailor/x"),
+          "les chemins du foyer sont expurgés dans les erreurs")
+    check(app_module._redact("ValueError: rien à voir") == "ValueError: rien à voir",
+          "un message sans chemin reste intact")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
                test_pwa_icons, test_branding, test_theme_assets, test_config_paths,
-               test_prompt_paths):
+               test_prompt_paths, test_health_redaction):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
