@@ -12,31 +12,30 @@ transporter l'offre et vérifier le résultat.
 from __future__ import annotations
 
 import json
-import os
 import re
-import shutil
 import subprocess
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
+import config
 import db
 
-CV_TAILOR = Path("/home/user/cv-tailor")
-PROMPT_DIR = Path("/home/user/job-hub/data/prompts")
-LOG_DIR = Path("/home/user/job-hub/logs")
-HERMES = shutil.which("hermes") or "/home/user/.local/bin/hermes"
-RUN_BUDGET = int(os.environ.get("HUB_RUN_BUDGET", "2700"))  # secondes
+CV_TAILOR = config.CV_TAILOR_DIR
+CV_OUTPUT = config.CV_OUTPUT_DIR
+PROMPT_DIR = config.PROMPT_DIR
+LOG_DIR = config.LOG_DIR
+HERMES = config.HERMES_BIN
+RUN_BUDGET = config.RUN_BUDGET
 
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 
 
-PROMPT_TEMPLATE = """Tu prépares une candidature pour Paul Nougarède. Charge le skill
+PROMPT_TEMPLATE = """Tu prépares une candidature pour {owner}. Charge le skill
 cv-application-tailor et suis-le intégralement : recherche de l'entreprise,
-plans JSON, budget de mots, génération docx + PDF, QA, puis mail d'archive à
-archive@example.invalid (avec les PDF ET les DOCX).
+plans JSON, budget de mots, génération docx + PDF, QA, {archive_step}
 
 Offre à traiter (données fournies par le hub de candidatures) :
 
@@ -55,8 +54,8 @@ Texte de l'offre :
 ---
 
 Contraintes supplémentaires de ce run :
-- Dossier de sortie obligatoire : /home/user/cv-tailor/output/{date}_{company_slug}_{title_slug}/
-- À la fin, écris TOI-MÊME /home/user/cv-tailor/output/{date}_{company_slug}_{title_slug}/manifest.json
+- Dossier de sortie obligatoire : {out_dir}
+- À la fin, écris TOI-MÊME {manifest_path}
   au format exact :
   {{"status": "ok", "offre_url": "{url}", "company": "{company}", "title": "{title}",
     "language": "fr|en", "files": {{"cv_pdf": "...", "lm_pdf": "...", "cv_docx": "...", "lm_docx": "..."}},
@@ -99,7 +98,21 @@ def build_prompt(offer: dict) -> tuple[str, str]:
     company_slug = _slug(offer.get("company") or "entreprise", 24)
     title_slug = _slug(offer.get("title") or "poste", 40)
     dirname = f"{day}_{company_slug}_{title_slug}"
+    out_dir = CV_OUTPUT / dirname
+    if config.ARCHIVE_EMAIL:
+        archive_step = (
+            f"puis mail d'archive à {config.ARCHIVE_EMAIL} (avec les PDF ET les DOCX)."
+        )
+    else:
+        archive_step = (
+            "puis saute l'étape de mail d'archive : aucune adresse n'est "
+            "configurée (HUB_ARCHIVE_EMAIL)."
+        )
     prompt = PROMPT_TEMPLATE.format(
+        owner=config.OWNER_NAME,
+        archive_step=archive_step,
+        out_dir=out_dir,
+        manifest_path=out_dir / "manifest.json",
         title=offer.get("title") or "",
         company=offer.get("company") or "",
         location=offer.get("location") or "",
@@ -147,10 +160,10 @@ def _find_manifest(started: float, expected_dir: Path, log_text: str) -> Path | 
     p = expected_dir / "manifest.json"
     if p.exists():
         return p
-    if (CV_TAILOR / "output").exists():
+    if CV_OUTPUT.exists():
         cands = [
             d / "manifest.json"
-            for d in (CV_TAILOR / "output").iterdir()
+            for d in CV_OUTPUT.iterdir()
             if d.is_dir() and (d / "manifest.json").exists()
             and d.stat().st_mtime >= started - 5
         ]
@@ -184,7 +197,7 @@ def _run_one(run_row: dict) -> None:
     prompt_path = PROMPT_DIR / f"run_{rid}.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
     log_path = LOG_DIR / f"run_{rid}.log"
-    expected = CV_TAILOR / "output" / dirname
+    expected = CV_OUTPUT / dirname
     started = time.time()
 
     cmd = [

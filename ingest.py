@@ -1,6 +1,7 @@
 """Ingestion des offres trouvées par le cron job-hunter, + amorçage de l'historique.
 
-Le cron écrit une ligne JSON par offre retenue dans /home/user/job-hunter/inbox.jsonl.
+Le cron de veille écrit une ligne JSON par offre retenue dans le fichier pointé
+par `HUB_INBOX` (par défaut `~/job-hunter/inbox.jsonl`, voir `config.py`).
 Ce module les transforme en cartes du board (dédoublonnage par URL) et garde un
 curseur pour ne pas relire ce qui est déjà importé.
 
@@ -13,11 +14,12 @@ import json
 import re
 from pathlib import Path
 
+import config
 import db
 
-INBOX = Path("/home/user/job-hunter/inbox.jsonl")
-SENT_LOG = Path("/home/user/job-hunter/sent.jsonl")  # fallback si le cron écrit là
-CV_TAILOR = Path("/home/user/cv-tailor")
+INBOX = config.INBOX_PATH
+SENT_LOG = config.SENT_LOG_PATH  # fallback si le cron écrit là
+CV_TAILOR = config.CV_TAILOR_DIR
 
 
 def _norm(d: dict) -> dict:

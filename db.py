@@ -12,8 +12,10 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("HUB_DB", "/home/user/job-hub/data/hub.db"))
-CV_TAILOR = Path("/home/user/cv-tailor")
+import config
+
+DB_PATH = config.DB_PATH
+CV_TAILOR = config.CV_TAILOR_DIR
 
 # Statuts du board, dans l'ordre d'affichage.
 STATUSES = ["new", "shortlist", "applied", "interview", "rejected", "offer"]
