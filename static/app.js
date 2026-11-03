@@ -12,7 +12,7 @@ const PIPELINE = ['shortlist', 'applied', 'interview', 'rejected', 'offer'];
 const state = {
   offers: [], stats: null, sites: [], q: '',
   view: 'new', openId: null, logTimer: null, boardTimer: null,
-  offerId: null, offerTimer: null
+  offerId: null, offerTimer: null, tabs: [], lastView: '#/nouvelles'
 };
 
 const $ = (s) => document.querySelector(s);
@@ -87,6 +87,67 @@ function applyHint(o) {
     APPLY_CONF[o.apply.confidence] ? ' · ' + esc(APPLY_CONF[o.apply.confidence]) : ''}</span>`;
 }
 
+/* ---------------- onglets internes (fiches d'offres) ---------------- */
+
+const TABS_KEY = 'jobhunter.tabs';
+const TABS_MAX = 8;
+
+function loadTabs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TABS_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((t) => t && Number.isFinite(Number(t.id)))
+      .map((t) => ({ id: Number(t.id), title: String(t.title || '') }))
+      .slice(0, TABS_MAX);
+  } catch (_) { return []; }
+}
+
+function saveTabs() {
+  try { localStorage.setItem(TABS_KEY, JSON.stringify(state.tabs)); } catch (_) { /* mode privé */ }
+}
+
+function ensureTab(id, title) {
+  let tab = state.tabs.find((t) => t.id === id);
+  if (!tab) {
+    tab = { id, title: title || 'Offre #' + id };
+    state.tabs.unshift(tab);
+    if (state.tabs.length > TABS_MAX) state.tabs.length = TABS_MAX;
+    saveTabs();
+  } else if (title && tab.title !== title) {
+    tab.title = title;
+    saveTabs();
+  }
+  return tab;
+}
+
+function closeTab(id) {
+  const wasActive = state.view === 'offer' && state.offerId === id;
+  state.tabs = state.tabs.filter((t) => t.id !== id);
+  saveTabs();
+  renderTabs();
+  if (wasActive) location.hash = state.lastView || '#/nouvelles';
+}
+
+function renderTabs() {
+  const el = $('#tabbar');
+  if (!el) return;
+  el.innerHTML = state.tabs.map((t) => `
+    <a class="tab ${state.view === 'offer' && state.offerId === t.id ? 'active' : ''}"
+       href="#/offre/${t.id}" title="${esc(t.title)}" data-tab="${t.id}">
+      <span class="t">${esc(t.title)}</span>
+      <span class="x" data-close="${t.id}" role="button" tabindex="0"
+            aria-label="fermer l’onglet" title="fermer">×</span>
+    </a>`).join('');
+  el.querySelectorAll('[data-close]').forEach((x) => {
+    x.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeTab(Number(x.dataset.close));
+    });
+  });
+}
+
 /* ---------------- routing ---------------- */
 
 function route() {
@@ -95,9 +156,12 @@ function route() {
   if (deep) {
     state.view = 'offer';
     state.offerId = Number(deep[1]);
+    ensureTab(state.offerId);
+    window.scrollTo(0, 0);
   } else {
     state.view = h.startsWith('candidatures') ? 'pipeline' : 'new';
     state.offerId = null;
+    state.lastView = state.view === 'pipeline' ? '#/candidatures' : '#/nouvelles';
   }
   if (!location.hash) history.replaceState(null, '', '#/nouvelles');
   document.querySelectorAll('#nav a').forEach((a) =>
@@ -105,6 +169,7 @@ function route() {
   $('#viewNew').hidden = state.view !== 'new';
   $('#viewPipeline').hidden = state.view !== 'pipeline';
   $('#viewOffer').hidden = state.view !== 'offer';
+  renderTabs();
   if (state.view === 'offer') {
     openOffer(state.offerId);
   } else {
@@ -679,6 +744,11 @@ async function fetchOffer(id) {
   const o = await r.json();
   if (state.view !== 'offer' || state.offerId !== id) return;
   renderOffer(o);
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab || tab.title !== o.title) {
+    ensureTab(id, o.title);
+    renderTabs();
+  }
   clearTimeout(state.offerTimer);
   const busy = o.run && (o.run.state === 'running' || o.run.state === 'queued');
   state.offerTimer = setTimeout(() => fetchOffer(id), busy || applyBusy(o) ? 4000 : 30000);
@@ -855,7 +925,7 @@ function renderOffer(o) {
     if (!confirm('Supprimer « ' + o.title + ' » du hub ?\n\nElle ne sera plus réimportée par le cron. Pour la récupérer, il faudra la rajouter à la main.')) return;
     await fetch('/api/offers/' + o.id, { method: 'DELETE' });
     load(true); toast('Offre supprimée');
-    location.hash = '#/nouvelles';
+    closeTab(o.id);
   };
 }
 
@@ -902,6 +972,7 @@ $('#mCancel').onclick = closeModal;
 $('#mSave').onclick = saveOffer;
 $('#modalWrap').addEventListener('click', (e) => { if (e.target.id === 'modalWrap') closeModal(); });
 $('#dClose').onclick = closeDrawer;
+$('#dExpand').onclick = () => closeDrawer();   // l'ancre fait le reste : la fiche s'ouvre dans un onglet interne
 $('#drawerWrap').addEventListener('click', (e) => { if (e.target.id === 'drawerWrap') closeDrawer(); });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeDrawer(); closeModal(); }
@@ -913,6 +984,7 @@ $('#refresh').onclick = async () => {
   toast('À jour');
 };
 
+state.tabs = loadTabs();
 route();
 loadSites();
 load();

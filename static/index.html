@@ -37,6 +37,8 @@
   <button class="btn primary" id="add">+ Offre</button>
 </header>
 
+<div class="tabbar" id="tabbar"></div>
+
 <main>
   <section class="view" id="viewNew" hidden>
     <div class="toolbar">
@@ -72,8 +74,8 @@
           <h2 id="dTitle">—</h2>
           <div class="sub" id="dSub"></div>
         </div>
-        <a class="btn small ghost" id="dExpand" target="_blank" rel="noopener"
-           title="Ouvrir la fiche complète dans un nouvel onglet">plein écran ↗</a>
+        <a class="btn small ghost" id="dExpand" role="button"
+           title="Ouvrir la fiche complète dans un onglet de l'application">ouvrir en grand</a>
         <button class="close" id="dClose" aria-label="fermer">×</button>
       </div>
     </div>
