@@ -14,9 +14,9 @@ from pathlib import Path
 # kind -> (libellé affiché, extension, préfixe du nom de fichier)
 DOC_KINDS = {
     "cv_pdf": ("CV", "pdf", "CV"),
-    "lm_pdf": ("Lettre de motivation", "pdf", "Lettre"),
-    "cv_docx": ("CV (modifiable)", "docx", "CV"),
-    "lm_docx": ("Lettre (modifiable)", "docx", "Lettre"),
+    "lm_pdf": ("Lettre", "pdf", "Lettre"),
+    "cv_docx": ("CV (Word)", "docx", "CV"),
+    "lm_docx": ("Lettre (Word)", "docx", "Lettre"),
 }
 
 RESEARCH_NAME = "company_research.md"

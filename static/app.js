@@ -11,7 +11,8 @@ const PIPELINE = ['shortlist', 'applied', 'interview', 'rejected', 'offer'];
 
 const state = {
   offers: [], stats: null, sites: [], q: '',
-  view: 'new', openId: null, logTimer: null, boardTimer: null
+  view: 'new', openId: null, logTimer: null, boardTimer: null,
+  offerId: null, offerTimer: null
 };
 
 const $ = (s) => document.querySelector(s);
@@ -67,13 +68,26 @@ function shortList(str, n = 4) {
 
 function route() {
   const h = location.hash.replace(/^#\/?/, '');
-  state.view = h.startsWith('candidatures') ? 'pipeline' : 'new';
+  const deep = h.match(/^offre\/(\d+)/);
+  if (deep) {
+    state.view = 'offer';
+    state.offerId = Number(deep[1]);
+  } else {
+    state.view = h.startsWith('candidatures') ? 'pipeline' : 'new';
+    state.offerId = null;
+  }
   if (!location.hash) history.replaceState(null, '', '#/nouvelles');
   document.querySelectorAll('#nav a').forEach((a) =>
     a.classList.toggle('active', a.dataset.view === state.view));
   $('#viewNew').hidden = state.view !== 'new';
   $('#viewPipeline').hidden = state.view !== 'pipeline';
-  render();
+  $('#viewOffer').hidden = state.view !== 'offer';
+  if (state.view === 'offer') {
+    openOffer(state.offerId);
+  } else {
+    stopOffer();
+    render();
+  }
 }
 
 window.addEventListener('hashchange', route);
@@ -329,6 +343,7 @@ async function refreshDrawer() {
 function renderDrawer(o) {
   const busy = o.run && (o.run.state === 'running' || o.run.state === 'queued');
   $('#dTitle').textContent = o.title;
+  $('#dExpand').href = '#/offre/' + o.id;
   $('#dSub').innerHTML = `${esc(o.company || '—')}${o.location ? ' · ' + esc(o.location) : ''}
      ${o.score != null ? ' · match ' + o.score + '/100' : ''}`;
 
@@ -345,10 +360,8 @@ function renderDrawer(o) {
     const files = ['cv_pdf', 'lm_pdf', 'cv_docx', 'lm_docx']
       .filter((k) => run.files && run.files[k])
       .map((k) => {
-        const dir = (run.output_dir || '').split('/').pop();
         const name = { cv_pdf: 'CV (PDF)', lm_pdf: 'Lettre (PDF)', cv_docx: 'CV (DOCX)', lm_docx: 'Lettre (DOCX)' }[k];
-        return `<a class="btn small" href="/files/${encodeURIComponent(dir)}/${encodeURIComponent(run.files[k])}"
-                   target="_blank">${name}</a>`;
+        return `<a class="btn small" href="/api/offers/${o.id}/doc/${k}">${name}</a>`;
       }).join('');
     const m = run.manifest || {};
     const summary = m.company_summary
@@ -447,8 +460,8 @@ async function tailor(id) {
   refreshDrawer(); load(true);
 }
 
-async function pollLog(runId) {
-  const el = document.getElementById('logs');
+async function pollLog(runId, elId) {
+  const el = document.getElementById(elId || 'logs');
   if (!el || el.offsetParent === null) return;
   try {
     const r = await fetch(`/api/runs/${runId}/log?lines=40`);
@@ -458,13 +471,302 @@ async function pollLog(runId) {
   } catch (_) { /* silencieux */ }
 }
 
-async function toggleLog(runId) {
-  const el = document.getElementById('logs');
+async function toggleLog(runId, elId) {
+  const el = document.getElementById(elId || 'logs');
   if (!el) return;
   el.style.display = '';
   const r = await fetch(`/api/runs/${runId}/log?lines=200`);
   const d = await r.json();
   el.textContent = (d.lines || []).join('\n') || '(log vide)';
+}
+
+/* ---------------- fiche d'une offre (onglet dédié) ---------------- */
+
+/* Markdown minimal et sûr : on échappe d'abord, on ne reconnaît ensuite que
+   les formes utilisées par le dossier entreprise (#, ##, listes, gras, liens).
+   Aucune balise brute venue du fichier ne peut donc s'exécuter. */
+function inlineMd(s) {
+  return s
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+function md(text) {
+  const lines = esc(text || '').split(/\r?\n/);
+  const out = [];
+  let para = [], list = null, items = [], gap = false;
+  const closeP = () => {
+    if (para.length) { out.push('<p>' + inlineMd(para.join(' ')) + '</p>'); para = []; }
+  };
+  const closeL = () => {
+    if (list) {
+      out.push(`<${list}>` + items.map((t) => '<li>' + inlineMd(t) + '</li>').join('') + `</${list}>`);
+      list = null; items = [];
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) { closeP(); gap = true; continue; }
+    const head = line.match(/^(#{1,6})\s+(.*)$/);
+    if (head) {
+      closeP(); closeL(); gap = false;
+      const tag = head[1].length <= 2 ? 'h2' : 'h3';
+      out.push(`<${tag}>${inlineMd(head[2])}</${tag}>`);
+      continue;
+    }
+    if (/^(-{3,}|\*{3,})$/.test(line)) { closeP(); closeL(); gap = false; out.push('<hr>'); continue; }
+    const ul = line.match(/^[-*]\s+(.*)$/);
+    const ol = line.match(/^\d+\.\s+(.*)$/);
+    if (ul || ol) {
+      closeP();
+      const kind = ul ? 'ul' : 'ol';
+      if (list && list !== kind) closeL();
+      list = kind;
+      items.push((ul || ol)[1]);
+      gap = false;
+      continue;
+    }
+    if (line.startsWith('&gt;')) {
+      closeP(); closeL(); gap = false;
+      out.push('<blockquote>' + inlineMd(line.slice(4).trim()) + '</blockquote>');
+      continue;
+    }
+    // retour à la ligne dans une puce : markdown le rend comme un espace
+    if (list && !gap) { items[items.length - 1] += ' ' + line; continue; }
+    closeL();
+    gap = false;
+    para.push(line);
+  }
+  closeP(); closeL();
+  return out.join('');
+}
+
+function fmtSize(n) {
+  if (!n) return '';
+  return n >= 1048576 ? (n / 1048576).toFixed(1).replace('.', ',') + ' Mo'
+    : Math.max(1, Math.round(n / 1024)) + ' Ko';
+}
+
+function stepsHtml(o) {
+  const seq = ['new', 'shortlist', 'applied', 'interview', 'offer'];
+  const i = seq.indexOf(o.status);
+  return seq.map((s, k) => {
+    const cls = o.status === 'rejected' ? 'step'
+      : k === i ? 'step now' : i > k ? 'step done' : 'step';
+    return `<span class="${cls}">${LABELS[s]}</span>`;
+  }).join('') + (o.status === 'rejected' ? '<span class="step now bad">Refusé</span>' : '');
+}
+
+function docRow(o, d) {
+  return `
+    <div class="doc">
+      <span class="ext">${esc(d.ext)}</span>
+      <span class="name" title="${esc(d.filename)}">${esc(d.label)}</span>
+      <span class="size">${fmtSize(d.size)}</span>
+      <a class="btn small" href="/api/offers/${o.id}/doc/${d.kind}"
+         title="télécharger ${esc(d.filename)}">↓ télécharger</a>
+      ${d.ext === 'pdf' ? `<a class="btn small ghost"
+          href="/api/offers/${o.id}/doc/${d.kind}?inline=true" target="_blank"
+          rel="noopener" title="aperçu dans le navigateur">aperçu ↗</a>` : ''}
+    </div>`;
+}
+
+function openOffer(id) {
+  const el = $('#detail');
+  if (!el || !id) return;
+  if (!el.dataset.id || Number(el.dataset.id) !== id) {
+    el.dataset.id = String(id);
+    el.innerHTML = '<div class="empty">chargement…</div>';
+  }
+  fetchOffer(id);
+}
+
+async function fetchOffer(id) {
+  let r;
+  try {
+    r = await fetch('/api/offers/' + id);
+  } catch (e) {
+    $('#detail').innerHTML = '<div class="empty">Hub injoignable.</div>';
+    return;
+  }
+  if (!r.ok) {
+    $('#detail').innerHTML = `<div class="empty big"><b>Offre introuvable.</b><br>
+      Elle a peut-être été supprimée. <a href="#/nouvelles">Retour aux nouvelles offres</a></div>`;
+    document.title = 'jobhunter';
+    return;
+  }
+  const o = await r.json();
+  if (state.view !== 'offer' || state.offerId !== id) return;
+  renderOffer(o);
+  clearTimeout(state.offerTimer);
+  const busy = o.run && (o.run.state === 'running' || o.run.state === 'queued');
+  state.offerTimer = setTimeout(() => fetchOffer(id), busy ? 4000 : 30000);
+  if (busy) pollLog(o.run.id, 'oLogs');
+}
+
+function renderOffer(o) {
+  document.title = o.title + ' — jobhunter';
+  const run = o.run;
+  const busy = run && (run.state === 'running' || run.state === 'queued');
+  const m = (run && run.manifest) || {};
+  const research = o.research;
+
+  const opts = Object.keys(LABELS).map((s) =>
+    `<option value="${s}" ${o.status === s ? 'selected' : ''}>${LABELS[s]}</option>`).join('');
+
+  const researchHtml = research
+    ? `${research.kind === 'summary'
+        ? '<p class="hint-line">Résumé du manifest — le dossier de recherche complet n\'a pas été conservé pour ce run.</p>'
+        : ''}
+       <div class="md">${md(research.markdown)}</div>
+       ${research.truncated ? '<p class="hint-line">Dossier tronqué à l\'affichage.</p>' : ''}`
+    : `<div class="empty">Aucune recherche entreprise : lance « ⚡ Adapter CV + LM »
+         pour que l'agent produise le dossier.</div>`;
+
+  const adapted = (m.adapted || []).map((a) => `<li>${esc(a)}</li>`).join('');
+  const gaps = (m.gaps || []).map((g) => `<li>${esc(g)}</li>`).join('');
+
+  let runHtml = '<div class="empty">Aucun run d\'adaptation.</div>';
+  if (run) {
+    const label = run.state === 'queued' ? 'en file d’attente'
+      : run.state === 'running' ? `en cours depuis ${ago(run.started_at).replace('il y a ', '')}`
+      : run.state === 'done' ? `terminé ${ago(run.finished_at)}`
+      : `échec ${ago(run.finished_at)}`;
+    runHtml = `
+      <div class="runbox">
+        <div class="state">
+          ${busy ? '<span class="dot" style="color:var(--warn)"></span>' : ''}
+          <span>Run #${run.id} — ${esc(label)}</span>
+        </div>
+        ${run.error ? `<div class="err">${esc(run.error)}</div>` : ''}
+        ${busy ? '<pre class="logs" id="oLogs">chargement du log…</pre>'
+               : `<div style="margin-top:11px"><button class="btn small ghost" onclick="toggleLog(${run.id}, 'oLogs')">voir le log</button></div>
+                  <pre class="logs" id="oLogs" style="display:none"></pre>`}
+      </div>`;
+  }
+
+  const docs = (o.documents || []).length
+    ? o.documents.map((d) => docRow(o, d)).join('')
+    : '<div class="empty">Aucun document. Lance une adaptation.</div>';
+
+  const tl = (o.events || []).map((e) => `
+    <div class="tl"><span class="b ${e.kind === 'documents_ready' || e.kind === 'status' ? 'on' : ''}"></span>
+      <div>${esc(e.message || e.kind)}<div class="d">${esc(e.kind)} · ${new Date(e.at).toLocaleString('fr-FR')}</div></div>
+    </div>`).join('');
+
+  const backHref = o.status === 'new' ? '#/nouvelles' : '#/candidatures';
+  const backLabel = o.status === 'new' ? '← retour aux nouvelles offres' : '← retour au suivi';
+
+  $('#detail').innerHTML = `
+    <div class="detail-top">
+      <a class="back" href="${backHref}">${backLabel}</a>
+      <div class="detail-head">
+        <div class="detail-title">
+          <div class="card-top">
+            ${scoreHtml(o.score)}
+            ${runChip(o)}
+          </div>
+          <h1>${esc(o.title)}</h1>
+          <div class="company">${esc(o.company || '—')}${o.location ? ' · ' + esc(o.location) : ''}${o.contract ? ' · ' + esc(o.contract) : ''}</div>
+        </div>
+        <div class="detail-actions">
+          <label class="f">Statut<select id="oStatus">${opts}</select></label>
+          <button class="btn primary" id="oTailor" ${busy ? 'disabled' : ''}>
+            ${busy ? 'en cours…' : run && run.state === 'done' ? '↻ Regénérer CV + LM' : '⚡ Adapter CV + LM'}
+          </button>
+          ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">ouvrir l’offre ↗</a>` : ''}
+        </div>
+      </div>
+      <div class="steps">${stepsHtml(o)}</div>
+    </div>
+
+    <div class="detail-body">
+      <div class="detail-main">
+        <section class="panel">
+          <p class="sect-title">Entreprise</p>
+          ${researchHtml}
+        </section>
+
+        <section class="panel">
+          <p class="sect-title">Ce qui a été adapté</p>
+          ${adapted ? `<ul class="md tight">${adapted}</ul>` : '<div class="empty">Rien à afficher tant qu\'aucun run n\'a abouti.</div>'}
+          ${gaps ? `<p class="sub-title">Écarts assumés</p><ul class="md tight">${gaps}</ul>` : ''}
+        </section>
+
+        <section class="panel">
+          <p class="sect-title">Description de l’offre</p>
+          <div class="desc tall">${esc(o.description || 'aucune description enregistrée')}</div>
+        </section>
+
+        <section class="panel">
+          <p class="sect-title">Notes</p>
+          <textarea id="oNotes" placeholder="contact, salaire, relance prévue…">${esc(o.notes || '')}</textarea>
+        </section>
+
+        <section class="panel">
+          <p class="sect-title">Historique</p>
+          <div class="timeline">${tl || '<div class="empty">—</div>'}</div>
+        </section>
+      </div>
+
+      <aside class="detail-rail">
+        <section class="panel">
+          <p class="sect-title">Documents</p>
+          <div class="doc-list">${docs}</div>
+        </section>
+
+        <section class="panel">
+          <p class="sect-title">Génération</p>
+          ${runHtml}
+        </section>
+
+        <section class="panel">
+          <p class="sect-title">Détails</p>
+          <dl class="kv">
+            <dt>Entreprise</dt><dd>${esc(o.company || '—')}</dd>
+            <dt>Lieu</dt><dd>${esc(o.location || '—')}</dd>
+            <dt>Contrat</dt><dd>${esc(o.contract || '—')}</dd>
+            <dt>Trouvée le</dt><dd>${esc(fmtDate(o.found_at))} · ${esc(o.source || '')}</dd>
+            <dt>Postulé le</dt><dd>${o.applied_at ? esc(fmtDate(o.applied_at)) : '—'}</dd>
+            ${o.url ? `<dt>Lien</dt><dd><a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.url.length > 48 ? o.url.slice(0, 48) + '…' : o.url)}</a></dd>` : ''}
+          </dl>
+        </section>
+
+        <section class="panel">
+          <button class="btn small ghost danger" id="oDelete">supprimer cette offre</button>
+        </section>
+      </aside>
+    </div>`;
+
+  $('#oStatus').onchange = async (e) => {
+    await fetch('/api/offers/' + o.id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: e.target.value })
+    });
+    load(true); fetchOffer(o.id);
+  };
+  $('#oNotes').onblur = async (e) => {
+    await fetch('/api/offers/' + o.id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: e.target.value })
+    });
+    toast('Note enregistrée');
+  };
+  $('#oTailor').onclick = () => tailor(o.id);
+  $('#oDelete').onclick = async () => {
+    if (!confirm('Supprimer « ' + o.title + ' » du hub ?\n\nElle ne sera plus réimportée par le cron. Pour la récupérer, il faudra la rajouter à la main.')) return;
+    await fetch('/api/offers/' + o.id, { method: 'DELETE' });
+    load(true); toast('Offre supprimée');
+    location.hash = '#/nouvelles';
+  };
+}
+
+function stopOffer() {
+  clearTimeout(state.offerTimer);
+  state.offerTimer = null;
+  document.title = 'jobhunter';
 }
 
 /* ---------------- ajout manuel ---------------- */
