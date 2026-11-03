@@ -220,9 +220,33 @@ def test_theme_assets():
     check("font-family: var(--font-ui)" in fields, "select/textarea/input : var(--font-ui)")
     check("var(--font-ui)" in _rule(css, ".search input"), "champ de recherche : var(--font-ui)")
     for selector in (".brand h1", ".toolbar-title h2", ".col-head h2", ".card h3",
-                     ".drawer-head h2", ".modal h2"):
+                     ".drawer-head h2", ".modal h2", ".detail-title h1", ".md h2"):
         body = _rule(css, selector)
         check(body and "font-family" not in body, f"{selector} hérite de la famille unique")
+
+
+def test_detail_view_assets():
+    """La fiche d'une offre est une vraie vue, bâtie sur la charte existante."""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+
+    check('id="viewOffer"' in html, "index.html porte la vue fiche")
+    check('id="dExpand"' in html and 'target="_blank"' in html,
+          "le tiroir ouvre la fiche dans un nouvel onglet")
+    check("'#/offre/' + o.id" in js, "le lien du tiroir pointe sur la fiche")
+    check("/^offre\\/(\\d+)/" in js, "le routeur reconnaît #/offre/<id>")
+    check('id="oStatus"' in js and 'id="oNotes"' in js,
+          "statut et notes modifiables depuis la fiche")
+    check("research.markdown" in js and "o.documents" in js,
+          "la fiche affiche la recherche entreprise et les documents")
+
+    body = _rule(css, ".detail-body")
+    check("grid-template-columns" in body, "fiche en deux colonnes")
+    check("var(--paper-card)" in _rule(css, ".panel"), "cartes de la fiche sur --paper-card")
+    check("var(--line)" in _rule(css, ".panel"), "filet 1 px existant, pas de nouvelle ombre dure")
+    for token in ("--good", "--warn", "--bad"):
+        check(token in css, f"jeton d'état {token} défini")
 
 
 def test_doc_helpers():
@@ -391,8 +415,8 @@ def test_worker_command():
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
-               test_pwa_icons, test_branding, test_theme_assets, test_doc_helpers,
-               test_offer_payload, test_config_paths,
+               test_pwa_icons, test_branding, test_theme_assets, test_detail_view_assets,
+               test_doc_helpers, test_offer_payload, test_config_paths,
                test_prompt_paths, test_health_redaction, test_worker_command):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
