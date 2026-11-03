@@ -24,6 +24,7 @@ import config
 import db
 import files as docfiles
 import ingest
+import linkhunt
 import worker
 
 ROOT = Path(__file__).resolve().parent
@@ -57,6 +58,7 @@ class OfferPatch(BaseModel):
     matched: list[str] | None = None
     gaps: list[str] | None = None
     description: str | None = None
+    apply_url: str | None = None
 
 
 @asynccontextmanager
@@ -64,12 +66,14 @@ async def lifespan(_app: FastAPI):
     db.init_db()
     ingest.ingest_inbox()
     worker.start()
+    linkhunt.start()
     threading.Thread(target=_watch_inbox, name="inbox-watch", daemon=True).start()
     try:
         yield
     finally:
         _watch_stop.set()
         worker.stop()
+        linkhunt.stop()
 
 
 app = FastAPI(title="Job Hub", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -213,10 +217,14 @@ def create_offer(payload: OfferIn):
 @app.patch("/api/offers/{oid}")
 def patch_offer(oid: int, payload: OfferPatch):
     data = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
+    had_apply = "apply_url" in data
+    apply_raw = data.pop("apply_url", None)
+    prev_status = None
     with db.conn() as c:
         r = c.execute("SELECT * FROM offers WHERE id = ?", (oid,)).fetchone()
         if not r:
             raise HTTPException(404, "offre inconnue")
+        prev_status = r["status"]
         status = data.pop("status", None)
         if data:
             sets = []
@@ -227,9 +235,33 @@ def patch_offer(oid: int, payload: OfferPatch):
             sets.append("updated_at = ?")
             vals.extend([db.now(), oid])
             c.execute(f"UPDATE offers SET {', '.join(sets)} WHERE id = ?", vals)
+        if had_apply:
+            url = linkhunt.clean_url(apply_raw)
+            if url:
+                db.set_apply(c, oid, "manual", url=url, kind="manual", confidence="high",
+                             note="lien saisi à la main")
+            else:
+                db.set_apply(c, oid, "idle")
         if status:
             db.set_status(c, oid, status)
+    # Garder une offre = le moment où le lien de candidature devient utile.
+    # La recherche est un confort : son échec ne doit jamais faire échouer le PATCH.
+    if status == "shortlist" and prev_status != "shortlist":
+        try:
+            linkhunt.enqueue(oid)
+        except Exception as e:  # pragma: no cover
+            print(f"[linkhunt] enqueue {oid}: {type(e).__name__}: {e}", flush=True)
     return {"ok": True}
+
+
+@app.post("/api/offers/{oid}/apply-link")
+def hunt_apply_link(oid: int):
+    """Relance la recherche du lien de candidature (bouton « retrouver le lien »)."""
+    try:
+        state = linkhunt.enqueue(oid, force=True)
+    except KeyError:
+        raise HTTPException(404, "offre inconnue")
+    return {"ok": True, "apply_state": state}
 
 
 @app.delete("/api/offers/{oid}")

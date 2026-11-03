@@ -42,6 +42,12 @@ HERMES_BIN = os.environ.get("HUB_HERMES_BIN", "").strip() or (
     shutil.which("hermes") or str(HOME / ".local" / "bin" / "hermes")
 )
 
+# Liens de candidature trouvés par l'agent (un fichier JSON + un log par essai).
+LINK_DIR = _path("HUB_LINK_DIR", LOG_DIR / "links")
+
+# Budget d'une recherche de lien, en secondes.
+LINK_BUDGET = int(os.environ.get("HUB_LINK_BUDGET", "300"))
+
 # Adresse qui reçoit l'archive des candidatures produites. Vide = pas de mail
 # (l'agent saute l'étape au lieu d'écrire à une adresse en dur).
 ARCHIVE_EMAIL = os.environ.get("HUB_ARCHIVE_EMAIL", "").strip()

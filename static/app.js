@@ -64,6 +64,29 @@ function shortList(str, n = 4) {
   return (str || []).slice(0, n);
 }
 
+/* ---------------- lien de candidature ---------------- */
+
+const APPLY_KIND = { site: "site de l’entreprise", ats: 'ATS', board: 'job board', manual: 'saisi à la main' };
+const APPLY_CONF = { high: 'confiance élevée', medium: 'confiance moyenne', low: 'confiance faible' };
+
+function applyBusy(o) {
+  return !!(o.apply && (o.apply.state === 'queued' || o.apply.state === 'running'));
+}
+
+function applyButton(o, cls) {
+  if (!o.apply || !o.apply.url) return '';
+  return `<a class="btn ${cls || ''} apply" href="${esc(o.apply.url)}" target="_blank"
+             rel="noopener" data-act="link" draggable="false"
+             title="${esc(o.apply.note || 'Lien de candidature')}">Postuler ↗</a>`;
+}
+
+function applyHint(o) {
+  if (applyBusy(o)) return '<span class="running"><span class="dot"></span>recherche du lien…</span>';
+  if (!o.apply || !o.apply.url) return '';
+  return `<span class="apply-meta">${esc(APPLY_KIND[o.apply.kind] || '')}${
+    APPLY_CONF[o.apply.confidence] ? ' · ' + esc(APPLY_CONF[o.apply.confidence]) : ''}</span>`;
+}
+
 /* ---------------- routing ---------------- */
 
 function route() {
@@ -117,7 +140,8 @@ async function loadSites() {
 }
 
 function activeRun() {
-  return state.offers.find((o) => o.run && (o.run.state === 'running' || o.run.state === 'queued'));
+  return state.offers.find((o) => (o.run && (o.run.state === 'running' || o.run.state === 'queued'))
+    || applyBusy(o));
 }
 
 function schedule(active) {
@@ -209,6 +233,8 @@ function cardPipe(o) {
     <div class="card-foot">
       <span class="when">${o.status === 'applied' && o.applied_at
         ? 'postulé ' + fmtDate(o.applied_at) : 'trouvée ' + fmtDate(o.found_at)}</span>
+      <span class="spacer"></span>
+      ${applyBusy(o) ? '<span class="running"><span class="dot"></span>lien…</span>' : applyButton(o, 'small')}
     </div>
   </article>`;
 }
@@ -257,7 +283,10 @@ function renderPipeline() {
   }).join('');
 
   board.querySelectorAll('.card').forEach((el) => {
-    el.addEventListener('click', () => openDrawer(Number(el.dataset.id)));
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act]')) return; // lien « Postuler » : ne pas ouvrir le tiroir
+      openDrawer(Number(el.dataset.id));
+    });
     el.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', el.dataset.id);
       el.classList.add('dragging');
@@ -400,8 +429,13 @@ function renderDrawer(o) {
         <button class="btn primary" id="dTailor" ${busy ? 'disabled' : ''}>
           ${run && run.state === 'done' ? '↻ Regénérer CV + LM' : '⚡ Adapter CV + LM'}
         </button>
-        ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">ouvrir l’offre ↗</a>` : ''}
+        ${applyButton(o)}
+        ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">offre ↗</a>` : ''}
       </div>
+      <div class="apply-line">${applyHint(o)}</div>
+      ${(!o.apply || !o.apply.url) && !applyBusy(o)
+        ? '<div style="margin-top:8px"><button class="btn small ghost" id="dHunt">chercher le lien de candidature</button></div>'
+        : ''}
       ${runHtml}
     </div>
     <div>
@@ -445,11 +479,22 @@ function renderDrawer(o) {
     toast('Note enregistrée');
   };
   $('#dTailor').onclick = () => tailor(o.id);
+  if ($('#dHunt')) $('#dHunt').onclick = () => hunt(o.id);
   $('#dDelete').onclick = async () => {
     if (!confirm('Supprimer « ' + o.title + ' » du hub ?\n\nElle ne sera plus réimportée par le cron. Pour la récupérer, il faudra la rajouter à la main.')) return;
     await fetch('/api/offers/' + o.id, { method: 'DELETE' });
     closeDrawer(); load(true); toast('Offre supprimée');
   };
+}
+
+async function hunt(id) {
+  const r = await fetch(`/api/offers/${id}/apply-link`, { method: 'POST' });
+  if (!r.ok) { toast('Recherche du lien impossible'); return; }
+  const d = await r.json();
+  toast(d.apply_state === 'queued' ? 'Recherche du lien de candidature lancée' : 'Recherche déjà en cours');
+  load(true);
+  if (state.openId === id) refreshDrawer();
+  if (state.view === 'offer' && state.offerId === id) fetchOffer(id);
 }
 
 async function tailor(id) {
@@ -559,6 +604,40 @@ function stepsHtml(o) {
   }).join('') + (o.status === 'rejected' ? '<span class="step now bad">Refusé</span>' : '');
 }
 
+function applyPanel(o) {
+  const a = o.apply || { state: 'idle' };
+  let body = '';
+  if (a.url) {
+    body += `<a class="btn apply wide" href="${esc(a.url)}" target="_blank" rel="noopener">Postuler ↗</a>
+      <div class="apply-line">${applyHint(o)}</div>
+      ${a.note ? `<p class="hint-line" style="margin-top:8px">${esc(a.note)}</p>` : ''}`;
+    if ((a.alternatives || []).length) {
+      body += `<details class="alts"><summary>${a.alternatives.length} autre${a.alternatives.length > 1 ? 's' : ''} piste${a.alternatives.length > 1 ? 's' : ''}</summary>
+        <ul class="md tight">${a.alternatives.map((x) => `<li><a href="${esc(x.url)}" target="_blank"
+          rel="noopener">${esc(APPLY_KIND[x.kind] || 'lien')}</a>${x.note ? ' — ' + esc(x.note) : ''}</li>`).join('')}</ul></details>`;
+    }
+  } else if (applyBusy(o)) {
+    body = `<div class="state"><span class="dot" style="color:var(--warn)"></span>
+      <span>recherche du lien de candidature…</span></div>`;
+  } else if (a.state === 'not_found') {
+    body = `<p class="hint-line">${esc(a.note || 'Aucun lien de candidature vérifié trouvé.')} Colle le lien ci-dessous.</p>`;
+  } else if (a.state === 'failed') {
+    body = `<p class="hint-line">Recherche impossible : ${esc(a.note || 'erreur inconnue')}. Colle le lien ci-dessous.</p>`;
+  } else {
+    body = '<p class="hint-line">Pas encore de lien : la recherche démarre quand l’offre passe en « À postuler ».</p>';
+  }
+  return `${body}
+    <details class="edit-link"><summary>corriger le lien</summary>
+      <label class="f">URL de candidature
+        <input type="text" id="oApplyUrl" value="${esc(a.url || '')}" placeholder="https://…">
+      </label>
+      <p class="hint-line" style="margin-top:6px">Enregistré à la sortie du champ. Vider le champ efface le lien.</p>
+    </details>
+    <div class="files" style="margin-top:10px">
+      <button class="btn small ghost" id="oHunt">${a.url ? '↻ relancer la recherche' : 'chercher le lien'}</button>
+    </div>`;
+}
+
 function docRow(o, d) {
   return `
     <div class="doc">
@@ -602,7 +681,7 @@ async function fetchOffer(id) {
   renderOffer(o);
   clearTimeout(state.offerTimer);
   const busy = o.run && (o.run.state === 'running' || o.run.state === 'queued');
-  state.offerTimer = setTimeout(() => fetchOffer(id), busy ? 4000 : 30000);
+  state.offerTimer = setTimeout(() => fetchOffer(id), busy || applyBusy(o) ? 4000 : 30000);
   if (busy) pollLog(o.run.id, 'oLogs');
 }
 
@@ -676,7 +755,8 @@ function renderOffer(o) {
           <button class="btn primary" id="oTailor" ${busy ? 'disabled' : ''}>
             ${busy ? 'en cours…' : run && run.state === 'done' ? '↻ Regénérer CV + LM' : '⚡ Adapter CV + LM'}
           </button>
-          ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">ouvrir l’offre ↗</a>` : ''}
+          ${applyButton(o)}
+          ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">offre ↗</a>` : ''}
         </div>
       </div>
       <div class="steps">${stepsHtml(o)}</div>
@@ -712,6 +792,11 @@ function renderOffer(o) {
       </div>
 
       <aside class="detail-rail">
+        <section class="panel">
+          <p class="sect-title">Candidature</p>
+          ${applyPanel(o)}
+        </section>
+
         <section class="panel">
           <p class="sect-title">Documents</p>
           <div class="doc-list">${docs}</div>
@@ -755,6 +840,17 @@ function renderOffer(o) {
     toast('Note enregistrée');
   };
   $('#oTailor').onclick = () => tailor(o.id);
+  $('#oHunt').onclick = () => hunt(o.id);
+  $('#oApplyUrl').onblur = async (e) => {
+    const url = e.target.value.trim();
+    if (url === (o.apply && o.apply.url ? o.apply.url : '')) return;
+    await fetch('/api/offers/' + o.id, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apply_url: url })
+    });
+    toast(url ? 'Lien de candidature enregistré' : 'Lien de candidature effacé');
+    load(true); fetchOffer(o.id);
+  };
   $('#oDelete').onclick = async () => {
     if (!confirm('Supprimer « ' + o.title + ' » du hub ?\n\nElle ne sera plus réimportée par le cron. Pour la récupérer, il faudra la rajouter à la main.')) return;
     await fetch('/api/offers/' + o.id, { method: 'DELETE' });
