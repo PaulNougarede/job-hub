@@ -225,9 +225,84 @@ def test_theme_assets():
         check(body and "font-family" not in body, f"{selector} hérite de la famille unique")
 
 
+def test_doc_helpers():
+    """Nommage des fichiers et garde-fous de /api/offers/<id>/doc/<kind>."""
+    import files as docfiles
+
+    check(docfiles.doc_filename("cv_pdf", "Groupe VYV", "2026-10-30")
+          == "CV_Groupe-VYV_2026-10-30.pdf", "nom de CV lisible et sans accent")
+    check(docfiles.doc_filename("lm_docx", "Brief IA", "2026-10-30")
+          == "Lettre_Brief-IA_2026-10-30.docx", "nom de lettre lisible")
+    try:
+        docfiles.doc_filename("autre", "X", "2026-01-01")
+        check(False, "type de document inconnu doit lever")
+    except ValueError:
+        check(True, "type de document inconnu refusé")
+
+    root = Path(tmp) / "output"
+    out = root / "2026-10-30_acme_ds"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "cv_fr.pdf").write_bytes(b"%PDF-1.4")
+    files_map = {"cv_pdf": "cv_fr.pdf", "lm_pdf": "absent.pdf"}
+    check(docfiles.resolve_doc(out, files_map, "cv_pdf", root) == (out / "cv_fr.pdf").resolve(),
+          "document existant résolu")
+    check(docfiles.resolve_doc(out, files_map, "lm_pdf", root) is None,
+          "fichier annoncé mais absent → None")
+    check(docfiles.resolve_doc(out, {"cv_pdf": "../../data/hub.db"}, "cv_pdf", root) is None,
+          "traversée de chemin refusée")
+    docs = docfiles.documents(out, files_map, "Acme", "2026-10-30", root)
+    check(len(docs) == 1 and docs[0]["filename"] == "CV_Acme_2026-10-30.pdf",
+          f"un seul document servi : {docs}")
+
+
+def test_offer_payload():
+    """GET /api/offers/<id> joint documents nommés + recherche entreprise."""
+    import app as app_module
+
+    oid, _ = db.upsert_offer({"url": "http://job/detail", "title": "Data Scientist",
+                              "company": "Acme", "score": 80})
+    assert oid is not None
+    root = Path(tmp) / "payload"
+    out = root / "2026-10-30_acme_ds"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "cv_fr.pdf").write_bytes(b"%PDF-1.4")
+    (out / "cv_fr.docx").write_bytes(b"PK")
+    (out / "company_research.md").write_text("# Acme\n\nFondée en 1999.", encoding="utf-8")
+    manifest = {"status": "ok", "company_summary": "Acme vend des logiciels.",
+                "company_research": "company_research.md"}
+    with db.conn() as c:
+        c.execute(
+            "INSERT INTO runs (offer_id, state, output_dir, files, manifest, created_at)"
+            " VALUES (?, 'done', ?, ?, ?, ?)",
+            (oid, str(out), json.dumps({"cv_pdf": "cv_fr.pdf", "cv_docx": "cv_fr.docx"}),
+             json.dumps(manifest), db.now()),
+        )
+    old = app_module.CV_OUTPUT
+    app_module.CV_OUTPUT = root
+    try:
+        payload = app_module.get_offer(oid)
+        kinds = [d["kind"] for d in payload["documents"]]
+        check(kinds == ["cv_pdf", "cv_docx"], f"documents présents seulement : {kinds}")
+        check(payload["documents"][0]["filename"].startswith("CV_Acme_"),
+              "nom de fichier téléchargé parlant")
+        check(payload["research"]["kind"] == "file"
+              and "Fondée en 1999" in payload["research"]["markdown"],
+              "recherche entreprise lue depuis le dossier de candidature")
+
+        # Sans fichier de recherche : repli sur le résumé du manifest, annoncé.
+        (out / "company_research.md").unlink()
+        payload = app_module.get_offer(oid)
+        check(payload["research"]["kind"] == "summary"
+              and payload["research"]["markdown"] == "Acme vend des logiciels.",
+              "repli sur company_summary, signalé comme résumé")
+        check(payload["documents"], "les documents restent servis")
+    finally:
+        app_module.CV_OUTPUT = old
+
+
 def test_config_paths():
     """Aucun chemin personnel en dur : tout passe par config.py + l'environnement."""
-    sources = ["app.py", "config.py", "db.py", "ingest.py", "worker.py",
+    sources = ["app.py", "config.py", "db.py", "files.py", "ingest.py", "worker.py",
                "start.sh", "scripts/issue-branch.sh"]
     offenders = []
     for name in sources:
@@ -316,7 +391,8 @@ def test_worker_command():
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
-               test_pwa_icons, test_branding, test_theme_assets, test_config_paths,
+               test_pwa_icons, test_branding, test_theme_assets, test_doc_helpers,
+               test_offer_payload, test_config_paths,
                test_prompt_paths, test_health_redaction, test_worker_command):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

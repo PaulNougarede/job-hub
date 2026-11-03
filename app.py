@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 import config
 import db
+import files as docfiles
 import ingest
 import worker
 
@@ -159,7 +160,43 @@ def get_offer(oid: int):
         run = db.latest_run(c, oid)
     out = db.row_to_offer(r, run)
     out["events"] = events
+    day = (out.get("applied_at") or out.get("found_at") or "")[:10]
+    if run:
+        out["documents"] = docfiles.documents(
+            run["output_dir"], run["files"], out.get("company"), day, CV_OUTPUT
+        )
+        out["research"] = docfiles.read_research(
+            run["output_dir"], run["manifest"], CV_OUTPUT
+        )
+    else:
+        out["documents"], out["research"] = [], None
     return out
+
+
+@app.get("/api/offers/{oid}/doc/{kind}")
+def offer_document(oid: int, kind: str, inline: bool = False):
+    """Télécharge le PDF/DOCX d'un run sous un nom lisible (CV_Acme_2026-10-30.pdf).
+
+    `inline=true` sert l'aperçu dans le navigateur au lieu du téléchargement.
+    """
+    with db.conn() as c:
+        r = c.execute("SELECT * FROM offers WHERE id = ?", (oid,)).fetchone()
+        if not r:
+            raise HTTPException(404, "offre inconnue")
+        run = db.latest_run(c, oid)
+    if not run or not run.get("output_dir"):
+        raise HTTPException(404, "aucun document pour cette offre")
+    target = docfiles.resolve_doc(run["output_dir"], run["files"], kind, CV_OUTPUT)
+    if not target:
+        raise HTTPException(404, "document inconnu")
+    day = (r["applied_at"] or r["found_at"] or "")[:10]
+    name = docfiles.doc_filename(kind, r["company"], day)
+    if not inline:
+        return FileResponse(target, filename=name)
+    return FileResponse(
+        target, media_type="application/pdf" if name.endswith(".pdf") else None,
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
 
 
 @app.post("/api/offers")
