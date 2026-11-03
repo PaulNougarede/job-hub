@@ -218,6 +218,16 @@ header {
 .btn.keep:hover { background: #DBE8DA; }
 .btn.drop { color: var(--dim); padding: 4px 8px; border-color: transparent; background: transparent; }
 .btn.drop:hover { color: var(--terra-deep); background: var(--terra-soft); border-color: rgba(164, 87, 46, .3); }
+/* candidater : l'action utile une fois l'offre gardée */
+.btn.apply {
+  border-color: rgba(76, 110, 82, .45); color: var(--sage-deep); background: var(--sage-soft);
+  font-weight: 600;
+}
+.btn.apply:hover { background: #DBE8DA; border-color: rgba(76, 110, 82, .6); }
+.btn.apply.wide { width: 100%; padding: 8px 12px; justify-content: center; }
+.apply-line { display: flex; align-items: center; gap: 8px; margin-top: 9px; font-size: 11.5px; color: var(--muted); }
+.apply-line:empty { display: none; }
+.apply-meta { font-size: 11px; color: var(--dim); }
 
 /* ---------- vues ---------- */
 main { min-height: calc(100vh - 58px); }
@@ -567,6 +577,17 @@ textarea { resize: vertical; min-height: 80px; font-family: var(--font-ui); font
 }
 .doc .size { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .doc .btn { flex: none; }
+.alts, .edit-link { margin-top: 10px; }
+.alts summary, .edit-link summary {
+  cursor: pointer; font-size: 11.5px; color: var(--muted); list-style: none;
+}
+.alts summary::-webkit-details-marker, .edit-link summary::-webkit-details-marker { display: none; }
+.alts summary::before, .edit-link summary::before { content: "› "; color: var(--dim); }
+.alts[open] summary::before, .edit-link[open] summary::before { content: "⌄ "; }
+.alts summary:hover, .edit-link summary:hover { color: var(--ink); }
+.alts ul { margin-top: 8px; }
+.edit-link[open] summary { margin-bottom: 8px; }
+.panel .state { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
 .desc.tall { max-height: 460px; }
 .btn.danger { color: var(--terra-deep); }
 .btn.danger:hover { color: var(--terra-deep); background: var(--terra-soft); border-color: rgba(164, 87, 46, .3); }

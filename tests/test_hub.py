@@ -324,9 +324,125 @@ def test_offer_payload():
         app_module.CV_OUTPUT = old
 
 
+def test_apply_schema_and_enqueue():
+    """Migration additive + file d'attente du lien de candidature."""
+    with db.conn() as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(offers)")}
+    check({"apply_url", "apply_state", "apply_at", "apply_alts"} <= cols,
+          "colonnes de candidature présentes après init_db")
+
+    import linkhunt
+
+    oid, _ = db.upsert_offer({"url": "http://job/lien", "title": "Data Scientist",
+                              "company": "Acme"})
+    assert oid is not None
+    check(linkhunt.enqueue(oid) == "queued", "enqueue passe l'offre en file")
+    check(linkhunt.enqueue(oid) == "queued", "pas de doublon quand la recherche est en file")
+    with db.conn() as c:
+        check(db.apply_state(c, oid) == "queued", "état persisté en base")
+        db.set_apply(c, oid, "found", url="https://acme.example/jobs/1", kind="ats",
+                     confidence="high", note="page ATS de l'entreprise")
+        check(db.apply_state(c, oid) == "found", "résultat enregistré")
+        # un état transitoire ne doit pas effacer le lien déjà trouvé
+        db.set_apply(c, oid, "running")
+        row = c.execute("SELECT apply_url FROM offers WHERE id=?", (oid,)).fetchone()
+        check(row["apply_url"] == "https://acme.example/jobs/1",
+              "un run qui démarre ne perd pas le lien existant")
+        db.set_apply(c, oid, "found", url="https://acme.example/jobs/1", kind="ats",
+                     confidence="high", note="page ATS de l'entreprise")
+    check(linkhunt.enqueue(oid) == "found", "un lien trouvé n'est pas recherché à nouveau")
+    check(linkhunt.enqueue(oid, force=True) == "queued", "relance possible avec force")
+    with db.conn() as c:
+        db.set_apply(c, oid, "manual", url="https://acme.example/postuler", kind="manual",
+                     confidence="high")
+        check(db.apply_state(c, oid) == "manual", "saisie manuelle tracée")
+        r = db.row_to_offer(c.execute("SELECT * FROM offers WHERE id=?", (oid,)).fetchone())
+    check(r["apply"]["url"] == "https://acme.example/postuler"
+          and r["apply"]["kind"] == "manual" and "apply_url" not in r,
+          "row_to_offer expose un objet apply et masque les colonnes brutes")
+
+
+def test_linkhunt_result():
+    """Le résultat de l'agent est normalisé ; aucune URL non http n'est retenue."""
+    import linkhunt
+
+    ok = linkhunt.normalise({"status": "ok", "apply_url": " https://x.example/j/1 ",
+                             "kind": "site", "confidence": "high", "reason": "page carrière",
+                             "alternatives": [{"url": "https://x.example/j/1", "kind": "board"},
+                                              {"url": "javascript:alert(1)"},
+                                              {"url": "https://board.example/x", "kind": "board",
+                                               "note": "même annonce"}]})
+    check(ok["url"] == "https://x.example/j/1" and ok["kind"] == "site", "URL nettoyée")
+    check(len(ok["alternatives"]) == 1 and ok["alternatives"][0]["url"] == "https://board.example/x",
+          "alternatives filtrées (doublon et javascript: écartés)")
+
+    bad = linkhunt.normalise({"status": "ok", "apply_url": "pas une url"})
+    check(bad["status"] == "failed" and bad["url"] is None,
+          "status ok sans URL valide → échec explicite")
+
+    nf = linkhunt.normalise({"status": "not_found", "reason": "offre retirée"})
+    check(nf["status"] == "not_found" and nf["reason"] == "offre retirée", "not_found conservé")
+
+    tmp_json = Path(tmp) / "link.json"
+    tmp_json.write_text(json.dumps({"status": "ok", "apply_url": "https://acme.example/a",
+                                    "kind": "ats", "confidence": "medium", "reason": "ATS"}),
+                        encoding="utf-8")
+    parsed = linkhunt.parse_result(tmp_json, "")
+    check(parsed["status"] == "ok" and parsed["confidence"] == "medium", "résultat lu depuis le fichier")
+    tmp_json.unlink()
+    log = 'bavardage\n```json\n{"status": "ok", "apply_url": "https://acme.example/b", "kind": "site"}\n```\nLINKFILE /x'
+    parsed = linkhunt.parse_result(tmp_json, log)
+    check(parsed["url"] == "https://acme.example/b", "repli : JSON lu dans le log si le fichier manque")
+    parsed = linkhunt.parse_result(tmp_json, "rien du tout")
+    check(parsed["status"] == "failed", "aucun JSON → échec, pas d'invention")
+
+
+def test_linkhunt_prompt_and_command():
+    import linkhunt
+
+    prompt = linkhunt.build_prompt(
+        {"title": "Data Scientist", "company": "Acme", "url": "https://board.example/1",
+         "location": "Paris", "contract": "CDI", "source": "adzuna"},
+        Path(tmp) / "offer_1.json",
+    )
+    for needle in ("Acme", "Data Scientist", "https://board.example/1", "offer_1.json",
+                   "LINKFILE"):
+        check(needle in prompt, f"prompt contient {needle}")
+    cmd = linkhunt.build_command(Path("/tmp/p.txt"))
+    check("--source" not in cmd, "aucun --source dans la commande de recherche")
+    check(cmd[cmd.index("-s") + 1] == "application-link-hunt", "skill de recherche chargé")
+    check(cmd[cmd.index("-t") + 1] == "web,file", "toolsets web+file seulement")
+    check(str(config.BASE_DIR) in cmd, "--in pointe sur le dépôt du hub")
+
+
+def test_apply_trigger_and_manual_override():
+    """Passer en À postuler lance la recherche ; l'URL manuelle gagne."""
+    import app as app_module
+
+    oid, _ = db.upsert_offer({"url": "http://job/trigger", "title": "ML Engineer",
+                              "company": "Beta"})
+    assert oid is not None
+    app_module.patch_offer(oid, app_module.OfferPatch(status="shortlist"))
+    with db.conn() as c:
+        check(db.apply_state(c, oid) == "queued", "passage en À postuler → recherche en file")
+
+    app_module.patch_offer(oid, app_module.OfferPatch(apply_url="https://beta.example/postuler"))
+    with db.conn() as c:
+        row = c.execute("SELECT apply_url, apply_state FROM offers WHERE id=?", (oid,)).fetchone()
+    check(row["apply_url"] == "https://beta.example/postuler" and row["apply_state"] == "manual",
+          "URL collée à la main enregistrée")
+
+    app_module.patch_offer(oid, app_module.OfferPatch(apply_url="javascript:alert(1)"))
+    with db.conn() as c:
+        row = c.execute("SELECT apply_url, apply_state FROM offers WHERE id=?", (oid,)).fetchone()
+    check(row["apply_url"] is None and row["apply_state"] == "idle",
+          "URL non http refusée et lien effacé")
+
+
 def test_config_paths():
     """Aucun chemin personnel en dur : tout passe par config.py + l'environnement."""
-    sources = ["app.py", "config.py", "db.py", "files.py", "ingest.py", "worker.py",
+    sources = ["app.py", "config.py", "db.py", "files.py", "ingest.py", "linkhunt.py",
+               "worker.py",
                "start.sh", "scripts/issue-branch.sh"]
     offenders = []
     for name in sources:
@@ -416,7 +532,9 @@ if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
                test_pwa_icons, test_branding, test_theme_assets, test_detail_view_assets,
-               test_doc_helpers, test_offer_payload, test_config_paths,
+               test_doc_helpers, test_offer_payload, test_apply_schema_and_enqueue,
+               test_linkhunt_result, test_linkhunt_prompt_and_command,
+               test_apply_trigger_and_manual_override, test_config_paths,
                test_prompt_paths, test_health_redaction, test_worker_command):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS dismissed (
 );
 """
 
+# Colonnes ajoutées après coup : `init_db()` les crée si la base les précède.
+# Toute migration du hub reste additive — un restart ne doit rien détruire.
+MIGRATIONS = {
+    "apply_url": "TEXT",        # URL de candidature (site, ATS, board)
+    "apply_kind": "TEXT",       # site|ats|board|manual
+    "apply_confidence": "TEXT",  # high|medium|low
+    "apply_alts": "TEXT",       # JSON list : pistes écartées, pour arbitrer
+    "apply_state": "TEXT",      # idle|queued|running|found|not_found|failed|manual
+    "apply_at": "TEXT",
+    "apply_note": "TEXT",       # une phrase : pourquoi ce lien
+}
+
 
 def now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -98,6 +110,10 @@ def conn():
 def init_db() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
+        have = {r["name"] for r in c.execute("PRAGMA table_info(offers)")}
+        for name, coltype in MIGRATIONS.items():
+            if name not in have:
+                c.execute(f"ALTER TABLE offers ADD COLUMN {name} {coltype}")
 
 
 def _loads(v):
@@ -113,6 +129,15 @@ def row_to_offer(r: sqlite3.Row, run: dict | None = None) -> dict:
     d = dict(r)
     d["matched"] = _loads(d.get("matched"))
     d["gaps"] = _loads(d.get("gaps"))
+    d["apply"] = {
+        "state": d.pop("apply_state", None) or "idle",
+        "url": d.pop("apply_url", None),
+        "kind": d.pop("apply_kind", None),
+        "confidence": d.pop("apply_confidence", None),
+        "alternatives": _loads(d.pop("apply_alts", None)),
+        "note": d.pop("apply_note", None),
+        "at": d.pop("apply_at", None),
+    }
     d["run"] = run
     return d
 
@@ -236,6 +261,57 @@ def latest_run(c: sqlite3.Connection, offer_id: int) -> dict | None:
         "SELECT * FROM runs WHERE offer_id = ? ORDER BY id DESC LIMIT 1", (offer_id,)
     ).fetchone()
     return row_to_run(r) if r else None
+
+
+# États d'une recherche de lien de candidature. `found`/`manual` gardent une URL,
+# `queued`/`running` ne touchent pas à celle qui existe déjà.
+APPLY_STATES = ("idle", "queued", "running", "found", "not_found", "failed", "manual")
+
+
+def set_apply(c: sqlite3.Connection, offer_id: int, state: str, *,
+              url: str | None = None, kind: str | None = None,
+              confidence: str | None = None, alternatives: list | None = None,
+              note: str | None = None) -> None:
+    """Met à jour le lien de candidature d'une offre.
+
+    Un changement de statut de recherche (`queued`, `running`) ne doit pas
+    effacer l'URL déjà trouvée : on ne touche alors qu'à `apply_state`.
+    """
+    if state not in APPLY_STATES:
+        raise ValueError(f"état de recherche inconnu: {state}")
+    ts = now()
+    if state in ("queued", "running"):
+        c.execute(
+            "UPDATE offers SET apply_state = ?, updated_at = ? WHERE id = ?",
+            (state, ts, offer_id),
+        )
+        return
+    c.execute(
+        "UPDATE offers SET apply_state = ?, apply_url = ?, apply_kind = ?,"
+        " apply_confidence = ?, apply_alts = ?, apply_note = ?, apply_at = ?,"
+        " updated_at = ? WHERE id = ?",
+        (state, url, kind, confidence,
+         json.dumps(alternatives or [], ensure_ascii=False), note, ts, ts, offer_id),
+    )
+    if state == "found":
+        log_event(c, offer_id, "apply_link", note or url or "")
+    elif state == "manual":
+        log_event(c, offer_id, "apply_link", f"lien saisi à la main : {url}")
+    elif state in ("not_found", "failed"):
+        log_event(c, offer_id, f"apply_link_{state}", note or "")
+
+
+def apply_state(c: sqlite3.Connection, offer_id: int) -> str:
+    r = c.execute("SELECT apply_state FROM offers WHERE id = ?", (offer_id,)).fetchone()
+    return (r["apply_state"] if r and r["apply_state"] else "idle")
+
+
+def next_apply_job(c: sqlite3.Connection) -> dict | None:
+    """Prochaine offre à traiter, la plus ancienne d'abord."""
+    r = c.execute(
+        "SELECT * FROM offers WHERE apply_state = 'queued' ORDER BY updated_at ASC LIMIT 1"
+    ).fetchone()
+    return dict(r) if r else None
 
 
 def active_run(c: sqlite3.Connection) -> dict | None:
