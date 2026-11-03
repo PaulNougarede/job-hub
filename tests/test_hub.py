@@ -232,8 +232,14 @@ def test_detail_view_assets():
     css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
     check('id="viewOffer"' in html, "index.html porte la vue fiche")
-    check('id="dExpand"' in html and 'target="_blank"' in html,
-          "le tiroir ouvre la fiche dans un nouvel onglet")
+    check('id="tabbar"' in html, "index.html porte la barre d'onglets internes")
+    check('id="dExpand"' in html, "le tiroir a un bouton « ouvrir en grand »")
+    expand = html.split('id="dExpand"')[1].split(">")[0]
+    check("target=" not in expand,
+          "« ouvrir en grand » n'ouvre plus de fenêtre du navigateur")
+    for needle in ("localStorage", "TABS_KEY", "function renderTabs", "function closeTab"):
+        check(needle in js, f"onglets internes : {needle}")
+    check("ensureTab(state.offerId)" in js, "la route #/offre/<id> crée son onglet")
     check("'#/offre/' + o.id" in js, "le lien du tiroir pointe sur la fiche")
     check("/^offre\\/(\\d+)/" in js, "le routeur reconnaît #/offre/<id>")
     check('id="oStatus"' in js and 'id="oNotes"' in js,
