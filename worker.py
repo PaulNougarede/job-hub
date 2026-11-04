@@ -6,7 +6,7 @@ skill cv-application-tailor, suit le run en base et récupère le manifest.json
 écrit par l'agent pour exposer les fichiers produits.
 
 Prompt volontairement court : toute la procédure (recherche entreprise, plans,
-budget de mots, QA, mail) est dans le skill, pas ici. Ce module ne fait que
+budget de mots, QA) est dans le skill, pas ici. Ce module ne fait que
 transporter l'offre et vérifier le résultat.
 """
 from __future__ import annotations
@@ -35,7 +35,9 @@ _thread: threading.Thread | None = None
 
 PROMPT_TEMPLATE = """Tu prépares une candidature pour {owner}. Charge le skill
 cv-application-tailor et suis-le intégralement : recherche de l'entreprise,
-plans JSON, budget de mots, génération docx + PDF, QA, {archive_step}
+plans JSON, budget de mots, génération docx + PDF, QA. Aucun mail n'est
+envoyé : les fichiers restent dans le dossier de sortie, Paul lit la
+candidature dans le hub.
 
 Offre à traiter (données fournies par le hub de candidatures) :
 
@@ -59,7 +61,7 @@ Contraintes supplémentaires de ce run :
   au format exact :
   {{"status": "ok", "offre_url": "{url}", "company": "{company}", "title": "{title}",
     "language": "fr|en", "files": {{"cv_pdf": "...", "lm_pdf": "...", "cv_docx": "...", "lm_docx": "..."}},
-    "email_sent": true|false, "company_summary": "3-4 phrases sur l'entreprise",
+    "company_summary": "3-4 phrases sur l'entreprise",
     "adapted": ["..."], "gaps": ["..."]}}
   Les chemins de "files" sont relatifs au dossier de sortie.
 - Si une étape échoue (LibreOffice absent, rendu 2 pages, PDF manquant), NE
@@ -99,18 +101,8 @@ def build_prompt(offer: dict) -> tuple[str, str]:
     title_slug = _slug(offer.get("title") or "poste", 40)
     dirname = f"{day}_{company_slug}_{title_slug}"
     out_dir = CV_OUTPUT / dirname
-    if config.ARCHIVE_EMAIL:
-        archive_step = (
-            f"puis mail d'archive à {config.ARCHIVE_EMAIL} (avec les PDF ET les DOCX)."
-        )
-    else:
-        archive_step = (
-            "puis saute l'étape de mail d'archive : aucune adresse n'est "
-            "configurée (HUB_ARCHIVE_EMAIL)."
-        )
     prompt = PROMPT_TEMPLATE.format(
         owner=config.OWNER_NAME,
-        archive_step=archive_step,
         out_dir=out_dir,
         manifest_path=out_dir / "manifest.json",
         title=offer.get("title") or "",

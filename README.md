@@ -88,7 +88,6 @@ Toutes les valeurs sont optionnelles et calculées au chargement par `config.py`
 | `HUB_SENT_LOG` | `sent.jsonl` à côté de l'inbox | variante d'entrée |
 | `HUB_HERMES_BIN` | `hermes` dans le `PATH` | agent lancé par le worker |
 | `HUB_OWNER_NAME` | `Paul Nougarède` | propriétaire annoncé dans le prompt |
-| `HUB_ARCHIVE_EMAIL` | vide | adresse d'archive des candidatures ; vide = pas de mail |
 | `HUB_RUN_BUDGET` | `2700` | budget d'un run, en secondes |
 | `HUB_HOST` / `HUB_PORT` | IP Tailscale / `8765` | écoute du service |
 
@@ -105,8 +104,9 @@ l'application.
 - **Aucune donnée personnelle dans Git** : `data/hub.db` (candidatures, notes),
   `data/prompts/` (offre + prompt), `logs/`, les CV générés et `.env` sont
   gitignorés. Ce dépôt ne contient que du code.
-- **Aucun secret dans le dépôt** : tout passe par l'environnement, y compris
-  l'adresse d'archive des candidatures, vide par défaut.
+- **Aucun secret dans le dépôt** : tout passe par l'environnement, et aucune
+  adresse d'envoi n'y figure : le hub ne poste rien à l'extérieur (les
+  candidatures sont livrées dans `output/`, consultables depuis l'app).
 - **Le texte d'une offre est une entrée non fiable.** Il vient d'un site d'emploi
   et finit dans le prompt d'un agent qui a accès au disque, au web et au
   terminal : c'est le vrai risque du projet (injection de prompt). Mitigations :

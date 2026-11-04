@@ -509,7 +509,6 @@ function renderDrawer(o) {
         </div>
         ${run.error ? `<div style="color:var(--bad);font-size:12px;margin-top:7px">${esc(run.error)}</div>` : ''}
         ${files ? `<div class="files" style="margin-top:11px">${files}</div>` : ''}
-        ${m.email_sent ? '<div style="font-size:11.5px;color:var(--good);margin-top:9px">mail d’archive envoyé</div>' : ''}
         ${summary}${adapted}
         ${busy ? '<pre class="logs" id="logs">chargement du log…</pre>'
                : `<div style="margin-top:11px"><button class="btn small ghost" onclick="toggleLog(${run.id})">voir le log</button></div>
@@ -602,7 +601,7 @@ async function hunt(id) {
 }
 
 async function tailor(id) {
-  if (!confirm('Lancer l’adaptation CV + LM ?\n\nCela lance un agent complet (recherche entreprise, CV, lettre, PDF, QA, mail à toi). Compte 5 à 15 minutes.')) return;
+  if (!confirm('Lancer l’adaptation CV + LM ?\n\nCela lance un agent complet (recherche entreprise, CV, lettre, PDF, QA). Les fichiers arrivent ensuite dans la fiche de l’offre. Compte 5 à 15 minutes.')) return;
   const r = await fetch(`/api/offers/${id}/tailor`, { method: 'POST' });
   if (!r.ok) { toast('Lancement impossible'); return; }
   toast('Run lancé — tu peux fermer cette fenêtre, le hub continue.');

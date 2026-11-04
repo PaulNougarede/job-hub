@@ -482,8 +482,6 @@ def test_config_paths():
 
     # Une valeur fournie par l'environnement gagne (HUB_DB du bac à sable).
     check(config.DB_PATH == Path(os.environ["HUB_DB"]).resolve(), "HUB_DB surcharge la valeur par défaut")
-    check(config.ARCHIVE_EMAIL == os.environ.get("HUB_ARCHIVE_EMAIL", "").strip(),
-          "adresse d'archive lue dans l'environnement")
 
 
 def test_prompt_paths():
@@ -498,9 +496,13 @@ def test_prompt_paths():
     check(prompt.count(str(config.CV_OUTPUT_DIR)) == 2,
           "prompt : dossier + manifest, tous deux calculés (aucun chemin figé)")
     check(config.OWNER_NAME in prompt, "propriétaire injecté depuis la config")
-    maille = "@" in prompt
-    check(maille == bool(config.ARCHIVE_EMAIL),
-          f"adresse d'archive seulement si configurée (mail={maille})")
+    # Invariant : plus aucune étape de mail dans le prompt (Paul lit tout dans
+    # le hub). Ni adresse, ni demande d'envoi, ni champ email_sent attendu.
+    check("@" not in prompt, "aucune adresse de mail dans le prompt")
+    check("archive" not in prompt.lower(), "aucune étape d'archive dans le prompt")
+    check("email_sent" not in prompt, "le manifeste demandé ne porte plus email_sent")
+    check("mail" not in prompt.lower() or "aucun mail" in prompt.lower(),
+          "le prompt ne demande pas d'envoi")
 
 
 def test_health_redaction():
