@@ -21,7 +21,17 @@ USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/130.0.0.0 Safari/537.36"
 )
-MAX_WORKERS = 6
+MAX_WORKERS = 4          # LinkedIn renvoie 429 bien avant 6 sondes simultanées
+BODY_BYTES = 262144      # préfixe lu pour chercher les marqueurs de fermeture
+
+# Chaînes d'interface qui signalent des candidatures fermées, malgré un 200.
+# Volontairement spécifiques : « offre expirée » ou « plus disponible » sont trop
+# génériques et apparaissent dans les encarts « offres similaires » des pages.
+CLOSED_MARKERS = (
+    "closed-job",
+    "candidatures ne sont plus acceptées",
+    "no longer accepting applications",
+)
 
 _lock = threading.Lock()
 _thread: threading.Thread | None = None
@@ -40,13 +50,52 @@ def classify(status: int | None) -> str:
     return "unknown"
 
 
+def is_expired_redirect(original: str, final: str) -> bool:
+    """LinkedIn renvoie 200 sur une page de listing quand l'annonce a expiré.
+
+    Le marqueur explicite est `trk=expired_jd_redirect` ; à défaut, une URL
+    LinkedIn qui ne pointe plus sur `/jobs/view/` n'est plus la fiche d'origine.
+    """
+    if "linkedin." not in (original or "").lower():
+        return False
+    fin = (final or "").lower()
+    if not fin:
+        return False
+    return "expired_jd_redirect" in fin or "/jobs/view/" not in fin
+
+
+def classify_page(status: int | None, original: str, final: str, body: str) -> str:
+    """État d'une annonce à partir du code, de l'URL finale et du corps reçu.
+
+    `ok` seulement si le serveur répond ET que la page est encore la fiche de
+    l'annonce ET qu'aucun marqueur de fermeture n'y figure. Un 200 sur une page
+    « les candidatures ne sont plus acceptées » ne vaut pas une annonce vivante.
+    """
+    state = classify(status)
+    if state != "ok":
+        return state
+    if is_expired_redirect(original, final):
+        return "gone"
+    low = (body or "").lower()
+    if any(marker in low for marker in CLOSED_MARKERS):
+        return "closed"
+    return "ok"
+
+
 def probe(url: str, timeout: float = 8.0) -> tuple[str, int | None]:
-    """GET de l'URL (redirections suivies), en-têtes seulement. Ne lève jamais."""
+    """GET de l'URL (redirections suivies). Ne lève jamais.
+
+    Renvoie (état, code HTTP). Le corps n'est lu que sur un 2xx/3xx et sur un
+    préfixe borné : on cherche des marqueurs d'interface, pas le texte.
+    """
     if not isinstance(url, str) or not url.strip().lower().startswith(("http://", "https://")):
         return "unknown", None
+    url = url.strip()
     status: int | None = None
+    final = url
+    body = ""
     try:
-        req = urllib.request.Request(url.strip(), method="GET", headers={
+        req = urllib.request.Request(url, method="GET", headers={
             "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
             "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
@@ -54,17 +103,21 @@ def probe(url: str, timeout: float = 8.0) -> tuple[str, int | None]:
         resp = urllib.request.urlopen(req, timeout=timeout)
         try:
             status = resp.status
+            final = resp.geturl() or url
+            if status is not None and 200 <= status <= 399:
+                body = resp.read(BODY_BYTES).decode("utf-8", "ignore")
         finally:
-            resp.close()  # on ne lit pas le corps : seul le code nous intéresse
+            resp.close()  # on ne lit pas plus loin : seuls le code et l'entête comptent
     except urllib.error.HTTPError as e:
         status = e.code
+        final = e.geturl() or url
         try:
             e.close()
         except Exception:
             pass
     except Exception:
         status = None
-    return classify(status), status
+    return classify_page(status, url, final, body), status
 
 
 def _check_one(offer_id: int, url: str) -> None:

@@ -259,10 +259,19 @@ function aliveChip(o) {
   if (o.url_state === 'gone') {
     return '<div class="chips"><span class="chip gap" title="l\'annonce ne répond plus">disparue</span></div>';
   }
+  if (o.url_state === 'closed') {
+    return '<div class="chips"><span class="chip gap" title="la page existe encore mais les candidatures sont fermées">candidatures closes</span></div>';
+  }
   if (o.url_state === 'unknown') {
     return '<div class="chips"><span class="chip" title="le site refuse la vérification">non vérifiable</span></div>';
   }
   return '';
+}
+
+/* Expirée : disparue (404, redirection d'expiration) ou en ligne sans candidatures.
+   Dans les deux cas, plus rien à postuler — masquée par défaut. */
+function isExpired(o) {
+  return o.url_state === 'gone' || o.url_state === 'closed';
 }
 
 function cardNew(o) {
@@ -319,30 +328,30 @@ function cardPipe(o) {
 
 function renderNew() {
   const all = state.offers.filter((o) => o.status === 'new' && matches(o));
-  const gone = all.filter((o) => o.url_state === 'gone');
-  const items = state.showGone ? all : all.filter((o) => o.url_state !== 'gone');
+  const expired = all.filter(isExpired);
+  const items = state.showGone ? all : all.filter((o) => !isExpired(o));
   const el = $('#gridNew');
 
   // Le basculement n'apparaît que s'il y a quelque chose à révéler.
   const toggle = $('#toggleGone');
-  toggle.hidden = gone.length === 0;
+  toggle.hidden = expired.length === 0;
   toggle.textContent = state.showGone
-    ? 'masquer les disparues'
-    : `afficher les disparues (${gone.length})`;
+    ? 'masquer les expirées'
+    : `afficher les expirées (${expired.length})`;
 
-  const hidden = state.showGone ? 0 : gone.length;
+  const hidden = state.showGone ? 0 : expired.length;
   const plural = (n) => (n > 1 ? 's' : '');
   $('#newHint').textContent = items.length
     ? `${items.length} offre${items.length > 1 ? 's' : ''} · triées par score`
-      + (hidden ? ` · ${hidden} disparue${plural(hidden)} masquée${plural(hidden)}` : '')
+      + (hidden ? ` · ${hidden} expirée${plural(hidden)} masquée${plural(hidden)}` : '')
     : (hidden
-        ? `aucune annonce vivante · ${hidden} disparue${plural(hidden)} masquée${plural(hidden)}`
+        ? `aucune annonce vivante · ${hidden} expirée${plural(hidden)} masquée${plural(hidden)}`
         : 'rien de neuf pour l’instant');
   el.innerHTML = items.length ? items.map(cardNew).join('')
     : `<div class="empty big" style="grid-column:1/-1">
          <b>${hidden ? 'Plus aucune annonce en ligne.' : 'Aucune nouvelle offre.'}</b><br>
          ${hidden
-           ? 'Les annonces qui restent ne répondent plus — « afficher les disparues » les montre.'
+           ? 'Les annonces qui restent ne sont plus ouvertes — « afficher les expirées » les montre.'
            : `Le cron de 9h remplit cette page tout seul, ou cherche à la main
          sur les job boards ci-dessus puis « + Offre ».`}
        </div>`;
@@ -1033,10 +1042,12 @@ function aliveBatch() {
 function aliveSummary(batch, incomplete) {
   const done = batch.filter((o) => o.url_checked_at && o.url_checked_at >= aliveRun.startedAt);
   const gone = done.filter((o) => o.url_state === 'gone').length;
+  const closed = done.filter((o) => o.url_state === 'closed').length;
   const unknown = done.filter((o) => o.url_state === 'unknown').length;
   const parts = [];
   if (aliveRun.ingested) parts.push(`${aliveRun.ingested} nouvelle${aliveRun.ingested > 1 ? 's' : ''}`);
   parts.push(`${gone} disparue${gone > 1 ? 's' : ''}`);
+  if (closed) parts.push(`${closed} close${closed > 1 ? 's' : ''}`);
   parts.push(`${unknown} non vérifiable${unknown > 1 ? 's' : ''}`);
   if (incomplete) parts.push(`${batch.length - done.length} sans réponse à temps`);
   return parts.join(', ');

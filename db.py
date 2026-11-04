@@ -91,7 +91,7 @@ MIGRATIONS = {
 }
 
 # Résultats possibles d'une vérification de l'URL d'origine (voir liveness.py).
-URL_STATES = ("ok", "gone", "unknown")
+URL_STATES = ("ok", "gone", "closed", "unknown")
 
 
 def now() -> str:

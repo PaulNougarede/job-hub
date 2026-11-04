@@ -547,6 +547,40 @@ def test_liveness_classify():
           "schéma non http : non vérifiable, sans réseau")
 
 
+def test_liveness_closed_page():
+    """Un 200 ne suffit pas : page de listing expirée, ou candidatures fermées."""
+    import liveness
+
+    LI = "https://fr.linkedin.com/jobs/view/data-scientist-at-x-123"
+    LISTING = "https://fr.linkedin.com/jobs/x-emplois?trk=expired_jd_redirect"
+
+    check(not liveness.is_expired_redirect(LI, LI), "toujours la fiche : pas expiré")
+    check(liveness.is_expired_redirect(LI, LISTING),
+          "redirection trk=expired_jd_redirect → expiré")
+    check(liveness.is_expired_redirect(LI, "https://fr.linkedin.com/jobs/x-emplois"),
+          "LinkedIn hors /jobs/view/ → expiré")
+    check(not liveness.is_expired_redirect("https://www.adzuna.fr/details/1",
+                                            "https://www.adzuna.fr/details/2"),
+          "hors LinkedIn : la règle ne s'applique pas")
+
+    check(liveness.classify_page(200, LI, LISTING, "") == "gone",
+          "200 final sur une page de listing → gone")
+    check(liveness.classify_page(200, LI, LI,
+                                 '<figure class="closed-job closed-job__flavor">…') == "closed",
+          "classe closed-job → candidatures closes")
+    check(liveness.classify_page(
+        200, LI, LI, "<figcaption>Les candidatures ne sont plus acceptées</figcaption>") == "closed",
+          "« Les candidatures ne sont plus acceptées » → closed")
+    check(liveness.classify_page(200, LI, LI, "No longer accepting applications") == "closed",
+          "« no longer accepting applications » → closed")
+    check(liveness.classify_page(200, LI, LI,
+                                 "<div>Offres similaires : Data Analyst</div>") == "ok",
+          "page vivante sans marqueur → ok")
+    check(liveness.classify_page(429, LI, LI, "") == "unknown",
+          "429 (LinkedIn limite) → non vérifiable, jamais gone")
+    check(liveness.classify_page(410, LI, LI, "") == "gone", "410 → gone")
+
+
 def test_url_state_migration():
     db.init_db()
     with db.conn() as c:
@@ -625,27 +659,31 @@ def test_check_alive_endpoint_offline():
 
 
 def test_gone_offers_hidden():
-    """Les annonces marquées « disparue » sont masquées par défaut, jamais supprimées."""
+    """Les annonces disparues ou closes sont masquées par défaut, jamais supprimées."""
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     new_view = js.split("function renderNew")[1].split("function renderPipeline")[0]
 
-    check('id="toggleGone"' in html, "index.html porte le basculement « disparues »")
+    check('id="toggleGone"' in html, "index.html porte le basculement « expirées »")
     check("hidden" in html.split('id="toggleGone"')[1].split(">")[0],
           "le basculement est masqué tant qu'il n'y a rien à révéler")
-    check("showGone: false" in js, "état initial : les disparues sont masquées")
-    check("o.url_state === 'gone'" in new_view, "le filtre porte sur url_state === 'gone'")
-    check("state.showGone ? all : all.filter" in new_view,
-          "la grille n'affiche pas les disparues par défaut")
+    check("showGone: false" in js, "état initial : les expirées sont masquées")
+    check("function isExpired" in js and "o.url_state === 'gone'" in js
+          and "o.url_state === 'closed'" in js,
+          "isExpired couvre disparue ET candidatures closes")
+    check("all.filter((o) => !isExpired(o))" in new_view,
+          "la grille n'affiche pas les expirées par défaut")
     check("$('#toggleGone').onclick" in js, "le basculement est câblé")
-    check("masquer les disparues" in new_view and "afficher les disparues (" in new_view,
+    check("masquer les expirées" in new_view and "afficher les expirées (" in new_view,
           "libellés du basculement")
-    check("disparue${plural(hidden)} masquée" in new_view,
+    check("expirée${plural(hidden)} masquée" in new_view,
           "le compteur annonce le nombre de masquées")
     check("Plus aucune annonce en ligne." in new_view,
-          "tout disparu : la vue le dit au lieu de « rien de neuf »")
+          "tout expiré : la vue le dit au lieu de « rien de neuf »")
     check("DELETE" not in new_view and "/api/offers/" not in new_view,
           "masquer est un filtre d'affichage : aucun appel d'écriture")
+    check("candidatures closes" in js and "non vérifiable" in js,
+          "les puces distinguent disparue, close et non vérifiable")
 
 
 if __name__ == "__main__":
@@ -656,7 +694,7 @@ if __name__ == "__main__":
                test_linkhunt_result, test_linkhunt_prompt_and_command,
                test_apply_trigger_and_manual_override, test_config_paths,
                test_prompt_paths, test_health_redaction, test_worker_command,
-               test_liveness_classify, test_url_state_migration,
+               test_liveness_classify, test_liveness_closed_page, test_url_state_migration,
                test_check_alive_endpoint_offline, test_gone_offers_hidden):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
