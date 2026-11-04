@@ -48,10 +48,6 @@ LINK_DIR = _path("HUB_LINK_DIR", LOG_DIR / "links")
 # Budget d'une recherche de lien, en secondes.
 LINK_BUDGET = int(os.environ.get("HUB_LINK_BUDGET", "300"))
 
-# Adresse qui reçoit l'archive des candidatures produites. Vide = pas de mail
-# (l'agent saute l'étape au lieu d'écrire à une adresse en dur).
-ARCHIVE_EMAIL = os.environ.get("HUB_ARCHIVE_EMAIL", "").strip()
-
 # Propriétaire du hub, tel qu'annoncé dans le prompt de l'agent.
 OWNER_NAME = os.environ.get("HUB_OWNER_NAME", "Paul Nougarède").strip()
 
