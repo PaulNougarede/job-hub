@@ -534,6 +534,96 @@ def test_worker_command():
     check(worker.HERMES == config.HERMES_BIN, "binaire hermes issu de la config")
 
 
+def test_liveness_classify():
+    import liveness
+
+    for code in (200, 301):
+        check(liveness.classify(code) == "ok", f"{code} → ok")
+    for code in (404, 410):
+        check(liveness.classify(code) == "gone", f"{code} → gone")
+    for code in (403, 429, 503, 999, None):
+        check(liveness.classify(code) == "unknown", f"{code} → unknown")
+    check(liveness.probe("ftp://example.org/x") == ("unknown", None),
+          "schéma non http : non vérifiable, sans réseau")
+
+
+def test_url_state_migration():
+    db.init_db()
+    with db.conn() as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(offers)")}
+    check({"url_state", "url_checked_at"} <= cols, "colonnes url_state / url_checked_at créées")
+    oid, _ = db.upsert_offer({"url": "https://job/alive-mig", "title": "ML Engineer"})
+    with db.conn() as c:
+        before = db.row_to_offer(c.execute("SELECT * FROM offers WHERE id=?", (oid,)).fetchone())
+    check("url_state" in before and before["url_state"] is None
+          and before["url_checked_at"] is None, "offre jamais vérifiée : états à None")
+    db.set_url_state(oid, "gone")
+    with db.conn() as c:
+        after = db.row_to_offer(c.execute("SELECT * FROM offers WHERE id=?", (oid,)).fetchone())
+    check(after["url_state"] == "gone" and after["url_checked_at"],
+          "set_url_state écrit l'état et la date")
+    try:
+        db.set_url_state(oid, "peut-être")
+        raise AssertionError("état d'URL inconnu accepté")
+    except ValueError:
+        check(True, "état d'URL inconnu refusé")
+
+
+def test_check_alive_endpoint_offline():
+    """Le bouton « Rafraîchir + vérifier », sans réseau : probe et ingest simulés."""
+    import app as app_module
+    import liveness
+
+    dead, _ = db.upsert_offer({"url": "https://job/alive-dead", "title": "Data Analyst"})
+    live, _ = db.upsert_offer({"url": "https://job/alive-live", "title": "Data Engineer"})
+    kept, _ = db.upsert_offer({"url": "https://job/alive-kept", "title": "MLOps"})
+    with db.conn() as c:
+        db.set_status(c, kept, "shortlist")
+    ids = [oid for oid, _ in db.offers_to_check()]
+    check(dead in ids and live in ids and kept not in ids,
+          "seules les offres nouvelles sont à vérifier")
+
+    import threading
+
+    seen = []
+    gate = threading.Event()   # retient le lot tant que le second clic n'a pas eu lieu
+
+    def fake_probe(url, timeout=8.0):
+        gate.wait(5)
+        seen.append(url)
+        if url.endswith("alive-dead"):
+            return "gone", 404
+        if url.endswith("alive-live"):
+            return "ok", 200
+        raise RuntimeError("hôte injoignable")   # doit être avalé, pas arrêter le lot
+
+    old_probe, old_ingest = liveness.probe, ingest.ingest_inbox
+    liveness.probe = fake_probe
+    ingest.ingest_inbox = lambda verbose=False: {"read": 2, "created": 2, "updated": 0,
+                                                 "skipped": 0, "errors": 0}
+    try:
+        out = app_module.check_alive()
+        check(out["ingested"] == 2 and out["running"] is True and out["queued"] >= 2,
+              f"réponse de l'endpoint : {out}")
+        first = liveness._thread
+        again = liveness.enqueue_check()
+        check(again["running"] is True and again["started_at"] == out["started_at"]
+              and liveness._thread is first, "un second clic ne lance pas un second lot")
+        gate.set()
+        liveness._thread.join(timeout=10)
+        check(not liveness._thread.is_alive(), "le lot se termine")
+    finally:
+        liveness.probe, ingest.ingest_inbox = old_probe, old_ingest
+
+    with db.conn() as c:
+        st = {r["id"]: r["url_state"] for r in c.execute(
+            "SELECT id, url_state FROM offers WHERE id IN (?,?,?)", (dead, live, kept))}
+    check(st[dead] == "gone", "404 → disparue")
+    check(st[live] == "ok", "200 → répond")
+    check(st[kept] is None, "offre non nouvelle : jamais vérifiée")
+    check(all("alive-kept" not in u for u in seen), "aucune sonde sur une offre suivie")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -541,6 +631,8 @@ if __name__ == "__main__":
                test_doc_helpers, test_offer_payload, test_apply_schema_and_enqueue,
                test_linkhunt_result, test_linkhunt_prompt_and_command,
                test_apply_trigger_and_manual_override, test_config_paths,
-               test_prompt_paths, test_health_redaction, test_worker_command):
+               test_prompt_paths, test_health_redaction, test_worker_command,
+               test_liveness_classify, test_url_state_migration,
+               test_check_alive_endpoint_offline):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

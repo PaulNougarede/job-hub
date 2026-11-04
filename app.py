@@ -25,6 +25,7 @@ import db
 import files as docfiles
 import ingest
 import linkhunt
+import liveness
 import worker
 
 ROOT = Path(__file__).resolve().parent
@@ -313,6 +314,20 @@ def sites():
 @app.post("/api/ingest")
 def do_ingest():
     return ingest.ingest_inbox()
+
+
+@app.post("/api/offers/check-alive")
+def check_alive():
+    """Relit l'inbox puis vérifie en tâche de fond que chaque nouvelle offre
+    répond encore. Ne bloque pas : les cartes se mettent à jour au fil de l'eau."""
+    stats = ingest.ingest_inbox() or {}
+    job = liveness.enqueue_check()
+    return {
+        "ingested": int(stats.get("created", 0)),
+        "queued": job["queued"],
+        "running": job["running"],
+        "started_at": job.get("started_at"),
+    }
 
 
 @app.get("/files/{path:path}")

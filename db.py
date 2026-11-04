@@ -86,7 +86,12 @@ MIGRATIONS = {
     "apply_state": "TEXT",      # idle|queued|running|found|not_found|failed|manual
     "apply_at": "TEXT",
     "apply_note": "TEXT",       # une phrase : pourquoi ce lien
+    "url_state": "TEXT",        # ok|gone|unknown|NULL : l'annonce d'origine répond-elle encore ?
+    "url_checked_at": "TEXT",
 }
+
+# Résultats possibles d'une vérification de l'URL d'origine (voir liveness.py).
+URL_STATES = ("ok", "gone", "unknown")
 
 
 def now() -> str:
@@ -138,6 +143,9 @@ def row_to_offer(r: sqlite3.Row, run: dict | None = None) -> dict:
         "note": d.pop("apply_note", None),
         "at": d.pop("apply_at", None),
     }
+    # Vérification de l'annonce d'origine : toujours présentes, même à None.
+    d["url_state"] = d.get("url_state")
+    d["url_checked_at"] = d.get("url_checked_at")
     d["run"] = run
     return d
 
@@ -312,6 +320,31 @@ def next_apply_job(c: sqlite3.Connection) -> dict | None:
         "SELECT * FROM offers WHERE apply_state = 'queued' ORDER BY updated_at ASC LIMIT 1"
     ).fetchone()
     return dict(r) if r else None
+
+
+def set_url_state(offer_id: int, state: str) -> None:
+    """Enregistre le résultat de la vérification de l'URL d'origine.
+
+    Ne touche pas à `updated_at` : vérifier une annonce n'est pas la modifier.
+    """
+    if state not in URL_STATES:
+        raise ValueError(f"état d'URL inconnu: {state}")
+    with conn() as c:
+        c.execute(
+            "UPDATE offers SET url_state = ?, url_checked_at = ? WHERE id = ?",
+            (state, now(), offer_id),
+        )
+
+
+def offers_to_check(status: str = "new") -> list[tuple[int, str]]:
+    """(id, url) des offres de ce statut qui ont une URL http(s) à vérifier."""
+    with conn() as c:
+        rows = c.execute(
+            "SELECT id, url FROM offers WHERE status = ? AND url IS NOT NULL ORDER BY id",
+            (status,),
+        ).fetchall()
+    return [(r["id"], r["url"]) for r in rows
+            if r["url"].strip().lower().startswith(("http://", "https://"))]
 
 
 def active_run(c: sqlite3.Connection) -> dict | None:

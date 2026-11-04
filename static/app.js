@@ -253,6 +253,17 @@ function render() {
   if (state.view === 'new') renderNew(); else renderPipeline();
 }
 
+/* Résultat de « Rafraîchir + vérifier » : une seule puce, rien si l'annonce répond. */
+function aliveChip(o) {
+  if (o.url_state === 'gone') {
+    return '<div class="chips"><span class="chip gap" title="l\'annonce ne répond plus">disparue</span></div>';
+  }
+  if (o.url_state === 'unknown') {
+    return '<div class="chips"><span class="chip" title="le site refuse la vérification">non vérifiable</span></div>';
+  }
+  return '';
+}
+
 function cardNew(o) {
   const gaps = shortList(o.gaps, 3).map((g) => `<span class="chip gap">${esc(g)}</span>`).join('');
   const chips = shortList(o.matched, 4).map((m) => `<span class="chip">${esc(m)}</span>`).join('');
@@ -267,6 +278,7 @@ function cardNew(o) {
     <h3 title="${esc(o.title)}">${esc(o.title)}</h3>
     <div class="company">${esc(o.company || '—')}${o.location ? ' · ' + esc(o.location) : ''}</div>
     ${o.contract ? `<div class="meta">${esc(o.contract)}</div>` : ''}
+    ${aliveChip(o)}
     ${chips || gaps ? `<div class="chips">${chips}${gaps}</div>` : ''}
     <div class="card-actions">
       <button class="btn small adapt" data-act="adapt" ${busy ? 'disabled' : ''}>
@@ -983,6 +995,85 @@ $('#refresh').onclick = async () => {
   await load();
   toast('À jour');
 };
+
+/* « Rafraîchir + vérifier » : relit l'inbox, puis le serveur sonde chaque
+   nouvelle offre en tâche de fond ; on recharge le board jusqu'à la fin du lot. */
+const ALIVE_LABEL = $('#checkAlive').textContent;
+const ALIVE_POLL_MS = 2500;
+const ALIVE_MAX_MS = 90000;
+let aliveTimer = null;
+let aliveRun = null;   // { startedAt, since, ingested }
+
+const isHttp = (u) => /^https?:\/\//i.test(String(u || '').trim());
+
+function aliveBatch() {
+  // Offres concernées par le lot en cours : nouvelles, avec une URL http(s).
+  return state.offers.filter((o) => o.status === 'new' && isHttp(o.url));
+}
+
+function aliveSummary(batch, incomplete) {
+  const done = batch.filter((o) => o.url_checked_at && o.url_checked_at >= aliveRun.startedAt);
+  const gone = done.filter((o) => o.url_state === 'gone').length;
+  const unknown = done.filter((o) => o.url_state === 'unknown').length;
+  const parts = [];
+  if (aliveRun.ingested) parts.push(`${aliveRun.ingested} nouvelle${aliveRun.ingested > 1 ? 's' : ''}`);
+  parts.push(`${gone} disparue${gone > 1 ? 's' : ''}`);
+  parts.push(`${unknown} non vérifiable${unknown > 1 ? 's' : ''}`);
+  if (incomplete) parts.push(`${batch.length - done.length} sans réponse à temps`);
+  return parts.join(', ');
+}
+
+function stopAliveCheck(message) {
+  clearTimeout(aliveTimer);
+  aliveTimer = null;
+  aliveRun = null;
+  const b = $('#checkAlive');
+  b.disabled = false;
+  b.textContent = ALIVE_LABEL;
+  if (message) toast(message, 4000);
+}
+
+async function pollAlive() {
+  if (!aliveRun) return;
+  await load(true);
+  if (!aliveRun) return;   // arrêté pendant le chargement (changement de vue)
+  const batch = aliveBatch();
+  const pending = batch.some((o) => !o.url_checked_at || o.url_checked_at < aliveRun.startedAt);
+  const late = Date.now() - aliveRun.since > ALIVE_MAX_MS;
+  if (!pending || late) {
+    stopAliveCheck(aliveSummary(batch, pending));
+    return;
+  }
+  aliveTimer = setTimeout(pollAlive, ALIVE_POLL_MS);
+}
+
+$('#checkAlive').onclick = async () => {
+  if (aliveRun) return;
+  const b = $('#checkAlive');
+  b.disabled = true;
+  b.textContent = 'vérification…';
+  let d;
+  try {
+    const r = await fetch('/api/offers/check-alive', { method: 'POST' });
+    d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || 'HTTP ' + r.status);
+  } catch (e) {
+    stopAliveCheck('Vérification impossible : ' + e.message);
+    return;
+  }
+  aliveRun = { startedAt: d.started_at || '', since: Date.now(), ingested: d.ingested || 0 };
+  if (!d.running) {
+    await load(true);
+    stopAliveCheck(d.ingested ? aliveSummary(aliveBatch(), false) : 'Aucune offre à vérifier');
+    return;
+  }
+  pollAlive();
+};
+
+// Quitter la vue « Nouvelles » arrête le suivi (la vérification continue côté serveur).
+window.addEventListener('hashchange', () => {
+  if (state.view !== 'new' && aliveRun) stopAliveCheck();
+});
 
 state.tabs = loadTabs();
 route();
