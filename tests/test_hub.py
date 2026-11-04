@@ -624,6 +624,30 @@ def test_check_alive_endpoint_offline():
     check(all("alive-kept" not in u for u in seen), "aucune sonde sur une offre suivie")
 
 
+def test_gone_offers_hidden():
+    """Les annonces marquées « disparue » sont masquées par défaut, jamais supprimées."""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    new_view = js.split("function renderNew")[1].split("function renderPipeline")[0]
+
+    check('id="toggleGone"' in html, "index.html porte le basculement « disparues »")
+    check("hidden" in html.split('id="toggleGone"')[1].split(">")[0],
+          "le basculement est masqué tant qu'il n'y a rien à révéler")
+    check("showGone: false" in js, "état initial : les disparues sont masquées")
+    check("o.url_state === 'gone'" in new_view, "le filtre porte sur url_state === 'gone'")
+    check("state.showGone ? all : all.filter" in new_view,
+          "la grille n'affiche pas les disparues par défaut")
+    check("$('#toggleGone').onclick" in js, "le basculement est câblé")
+    check("masquer les disparues" in new_view and "afficher les disparues (" in new_view,
+          "libellés du basculement")
+    check("disparue${plural(hidden)} masquée" in new_view,
+          "le compteur annonce le nombre de masquées")
+    check("Plus aucune annonce en ligne." in new_view,
+          "tout disparu : la vue le dit au lieu de « rien de neuf »")
+    check("DELETE" not in new_view and "/api/offers/" not in new_view,
+          "masquer est un filtre d'affichage : aucun appel d'écriture")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -633,6 +657,6 @@ if __name__ == "__main__":
                test_apply_trigger_and_manual_override, test_config_paths,
                test_prompt_paths, test_health_redaction, test_worker_command,
                test_liveness_classify, test_url_state_migration,
-               test_check_alive_endpoint_offline):
+               test_check_alive_endpoint_offline, test_gone_offers_hidden):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

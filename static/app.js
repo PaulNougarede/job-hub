@@ -12,7 +12,8 @@ const PIPELINE = ['shortlist', 'applied', 'interview', 'rejected', 'offer'];
 const state = {
   offers: [], stats: null, sites: [], q: '',
   view: 'new', openId: null, logTimer: null, boardTimer: null,
-  offerId: null, offerTimer: null, tabs: [], lastView: '#/nouvelles'
+  offerId: null, offerTimer: null, tabs: [], lastView: '#/nouvelles',
+  showGone: false   // les annonces marquées « disparue » sont masquées par défaut
 };
 
 const $ = (s) => document.querySelector(s);
@@ -317,16 +318,33 @@ function cardPipe(o) {
 }
 
 function renderNew() {
-  const items = state.offers.filter((o) => o.status === 'new' && matches(o));
+  const all = state.offers.filter((o) => o.status === 'new' && matches(o));
+  const gone = all.filter((o) => o.url_state === 'gone');
+  const items = state.showGone ? all : all.filter((o) => o.url_state !== 'gone');
   const el = $('#gridNew');
+
+  // Le basculement n'apparaît que s'il y a quelque chose à révéler.
+  const toggle = $('#toggleGone');
+  toggle.hidden = gone.length === 0;
+  toggle.textContent = state.showGone
+    ? 'masquer les disparues'
+    : `afficher les disparues (${gone.length})`;
+
+  const hidden = state.showGone ? 0 : gone.length;
+  const plural = (n) => (n > 1 ? 's' : '');
   $('#newHint').textContent = items.length
     ? `${items.length} offre${items.length > 1 ? 's' : ''} · triées par score`
-    : 'rien de neuf pour l’instant';
+      + (hidden ? ` · ${hidden} disparue${plural(hidden)} masquée${plural(hidden)}` : '')
+    : (hidden
+        ? `aucune annonce vivante · ${hidden} disparue${plural(hidden)} masquée${plural(hidden)}`
+        : 'rien de neuf pour l’instant');
   el.innerHTML = items.length ? items.map(cardNew).join('')
     : `<div class="empty big" style="grid-column:1/-1">
-         <b>Aucune nouvelle offre.</b><br>
-         Le cron de 9h remplit cette page tout seul, ou cherche à la main
-         sur les job boards ci-dessus puis « + Offre ».
+         <b>${hidden ? 'Plus aucune annonce en ligne.' : 'Aucune nouvelle offre.'}</b><br>
+         ${hidden
+           ? 'Les annonces qui restent ne répondent plus — « afficher les disparues » les montre.'
+           : `Le cron de 9h remplit cette page tout seul, ou cherche à la main
+         sur les job boards ci-dessus puis « + Offre ».`}
        </div>`;
 
   el.querySelectorAll('.card').forEach((c) => {
@@ -990,6 +1008,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeDrawer(); closeModal(); }
 });
 $('#q').addEventListener('input', (e) => { state.q = e.target.value.trim(); render(); });
+$('#toggleGone').onclick = () => { state.showGone = !state.showGone; renderNew(); };
 $('#refresh').onclick = async () => {
   await fetch('/api/ingest', { method: 'POST' });
   await load();
