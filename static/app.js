@@ -382,8 +382,10 @@ function renderNew() {
 function colCheckBtn(st) {
   if (!LIVENESS_COLS.includes(st)) return '';
   const busy = !!state.alive && state.alive.status === st;
-  const label = busy ? 'vérification…' : '↻ vérifier';
-  return `<button class="btn small ghost check" data-check="${st}" data-label="↻ vérifier"
+  // Libellé court : l'entête de colonne fait 215 px, « ↻ vérifier » le faisait
+  // passer à deux lignes avec le compteur.
+  const label = busy ? 'vérifie…' : 'vérifier';
+  return `<button class="btn small ghost check" data-check="${st}" data-label="vérifier"
             title="Vérifier que chaque annonce de cette colonne répond encore"
             ${busy ? 'disabled' : ''}>${label}</button>`;
 }
