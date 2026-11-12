@@ -316,13 +316,25 @@ def do_ingest():
     return ingest.ingest_inbox()
 
 
+# Colonnes dont les annonces sont sondées : une offre encore à postuler (ou
+# fraîche) qui ne répond plus fait perdre du temps ; une fois la candidature
+# envoyée, une annonce close n'a plus d'importance.
+CHECKABLE = ("new", "shortlist")
+
+
 @app.post("/api/offers/check-alive")
-def check_alive():
-    """Relit l'inbox puis vérifie en tâche de fond que chaque nouvelle offre
-    répond encore. Ne bloque pas : les cartes se mettent à jour au fil de l'eau."""
-    stats = ingest.ingest_inbox() or {}
-    job = liveness.enqueue_check()
+def check_alive(status: str = "new"):
+    """Vérifie en tâche de fond que les offres de ces colonnes répondent encore.
+
+    Pour les nouvelles offres, relit d'abord l'inbox (le bouton « Rafraîchir +
+    vérifier »). Ne bloque pas : les cartes se mettent à jour au fil de l'eau.
+    """
+    if status not in CHECKABLE:
+        raise HTTPException(400, f"statut non vérifiable: {status}")
+    stats = (ingest.ingest_inbox() or {}) if status == "new" else {}
+    job = liveness.enqueue_check(status)
     return {
+        "status": status,
         "ingested": int(stats.get("created", 0)),
         "queued": job["queued"],
         "running": job["running"],

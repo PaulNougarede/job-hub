@@ -336,12 +336,17 @@ def set_url_state(offer_id: int, state: str) -> None:
         )
 
 
-def offers_to_check(status: str = "new") -> list[tuple[int, str]]:
-    """(id, url) des offres de ce statut qui ont une URL http(s) à vérifier."""
+def offers_to_check(statuses: str | tuple[str, ...] = "new") -> list[tuple[int, str]]:
+    """(id, url) des offres de ces statuts qui ont une URL http(s) à vérifier."""
+    if isinstance(statuses, str):
+        statuses = (statuses,)
+    if not statuses:
+        return []
+    marks = ",".join("?" * len(statuses))
     with conn() as c:
         rows = c.execute(
-            "SELECT id, url FROM offers WHERE status = ? AND url IS NOT NULL ORDER BY id",
-            (status,),
+            f"SELECT id, url FROM offers WHERE status IN ({marks}) AND url IS NOT NULL ORDER BY id",
+            tuple(statuses),
         ).fetchall()
     return [(r["id"], r["url"]) for r in rows
             if r["url"].strip().lower().startswith(("http://", "https://"))]

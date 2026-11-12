@@ -1,8 +1,10 @@
-"""Vérification que les annonces « nouvelles » répondent encore, en tâche de fond.
+"""Vérification que les annonces répondent encore, en tâche de fond.
 
-Une annonce disparue (404/410) n'a plus d'intérêt ; un site qui refuse les
-robots (403, 429, captcha…) ou ne répond pas reste « non vérifiable » — on ne
-conclut jamais à la disparition sans une réponse explicite du serveur.
+Sont sondées les offres des colonnes « Nouvelles » et « À postuler » (une
+candidature déjà envoyée n'a plus besoin d'être en ligne). Une annonce
+disparue (404/410) n'a plus d'intérêt ; un site qui refuse les robots (403,
+429, captcha…) ou ne répond pas reste « non vérifiable » — on ne conclut
+jamais à la disparition sans une réponse explicite du serveur.
 
 Un seul lot à la fois : un clic pendant qu'une vérification tourne ne lance
 rien de plus (même schéma de thread unique que linkhunt).
@@ -141,8 +143,8 @@ def is_running() -> bool:
     return bool(_thread and _thread.is_alive())
 
 
-def enqueue_check() -> dict:
-    """Lance la vérification des offres `new`. Ne bloque pas.
+def enqueue_check(statuses: str | tuple[str, ...] = "new") -> dict:
+    """Lance la vérification des offres de ces statuts. Ne bloque pas.
 
     Si un lot tourne déjà, on n'en lance pas un second : on renvoie son état.
     `started_at` permet au navigateur de savoir quand toutes les cartes ont
@@ -152,7 +154,7 @@ def enqueue_check() -> dict:
     with _lock:
         if is_running():
             return {"running": True, "queued": _queued, "started_at": _started_at}
-        jobs = db.offers_to_check("new")
+        jobs = db.offers_to_check(statuses)
         _queued = len(jobs)
         _started_at = db.now()
         if not jobs:

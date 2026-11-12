@@ -8,12 +8,16 @@ const LABELS = {
   interview: 'Entretien', rejected: 'Refusé', offer: 'Offre'
 };
 const PIPELINE = ['shortlist', 'applied', 'interview', 'rejected', 'offer'];
+/* Colonnes dont les annonces sont sondées : une candidature déjà envoyée n'a
+   plus besoin d'être en ligne, inutile de la vérifier. */
+const LIVENESS_COLS = ['shortlist'];
 
 const state = {
   offers: [], stats: null, sites: [], q: '',
   view: 'new', openId: null, logTimer: null, boardTimer: null,
   offerId: null, offerTimer: null, tabs: [], lastView: '#/nouvelles',
-  showGone: false   // les annonces marquées « disparue » sont masquées par défaut
+  showGone: false,   // les annonces marquées « disparue » sont masquées par défaut
+  alive: null        // lot de vérification en cours : { status, startedAt, since, ingested }
 };
 
 const $ = (s) => document.querySelector(s);
@@ -317,6 +321,7 @@ function cardPipe(o) {
     <h3 title="${esc(o.title)}">${esc(o.title)}</h3>
     <div class="company">${esc(o.company || '—')}${o.location ? ' · ' + esc(o.location) : ''}</div>
     ${o.contract ? `<div class="meta">${esc(o.contract)}</div>` : ''}
+    ${o.status === 'shortlist' ? aliveChip(o) : ''}
     <div class="card-foot">
       <span class="when">${o.status === 'applied' && o.applied_at
         ? 'postulé ' + fmtDate(o.applied_at) : 'trouvée ' + fmtDate(o.found_at)}</span>
@@ -373,18 +378,37 @@ function renderNew() {
   });
 }
 
+/* Bouton « vérifier » d'une colonne (voir LIVENESS_COLS). */
+function colCheckBtn(st) {
+  if (!LIVENESS_COLS.includes(st)) return '';
+  const busy = !!state.alive && state.alive.status === st;
+  // Libellé court : l'entête de colonne fait 215 px, « ↻ vérifier » le faisait
+  // passer à deux lignes avec le compteur.
+  const label = busy ? 'vérifie…' : 'vérifier';
+  return `<button class="btn small ghost check" data-check="${st}" data-label="vérifier"
+            title="Vérifier que chaque annonce de cette colonne répond encore"
+            ${busy ? 'disabled' : ''}>${label}</button>`;
+}
+
 function renderPipeline() {
   const board = $('#board');
   board.innerHTML = PIPELINE.map((st) => {
     const list = state.offers.filter((o) => o.status === st && matches(o));
     return `
     <section class="col" data-status="${st}">
-      <div class="col-head"><h2>${LABELS[st]}</h2><span class="count">${list.length}</span></div>
+      <div class="col-head"><h2>${LABELS[st]}</h2><span class="count">${list.length}</span>${colCheckBtn(st)}</div>
       <div class="col-body" data-status="${st}">
         ${list.length ? list.map(cardPipe).join('') : '<div class="empty">—</div>'}
       </div>
     </section>`;
   }).join('');
+
+  board.querySelectorAll('[data-check]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      runAliveCheck(b.dataset.check, b);
+    });
+  });
 
   board.querySelectorAll('.card').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -1023,28 +1047,35 @@ $('#refresh').onclick = async () => {
   toast('À jour');
 };
 
-/* « Rafraîchir + vérifier » : relit l'inbox, puis le serveur sonde chaque
-   nouvelle offre en tâche de fond ; on recharge le board jusqu'à la fin du lot. */
+/* « Vérifier » (vue Nouvelles, et colonne À postuler) : le serveur sonde les
+   annonces en tâche de fond ; on recharge le board jusqu'à la fin du lot. */
 const ALIVE_LABEL = $('#checkAlive').textContent;
 const ALIVE_POLL_MS = 2500;
 const ALIVE_MAX_MS = 90000;
 let aliveTimer = null;
-let aliveRun = null;   // { startedAt, since, ingested }
 
 const isHttp = (u) => /^https?:\/\//i.test(String(u || '').trim());
 
-function aliveBatch() {
-  // Offres concernées par le lot en cours : nouvelles, avec une URL http(s).
-  return state.offers.filter((o) => o.status === 'new' && isHttp(o.url));
+function aliveBatch(status) {
+  // Offres concernées par le lot : ce statut, avec une URL http(s).
+  return state.offers.filter((o) => o.status === status && isHttp(o.url));
+}
+
+/* Le board est reconstruit à chaque chargement : on relit le bouton du DOM au
+   lieu de garder une référence sur un élément remplacé. */
+function aliveButton(status) {
+  return status === 'new' ? $('#checkAlive')
+    : document.querySelector('.col[data-status="' + status + '"] [data-check]');
 }
 
 function aliveSummary(batch, incomplete) {
-  const done = batch.filter((o) => o.url_checked_at && o.url_checked_at >= aliveRun.startedAt);
+  const run = state.alive || {};
+  const done = batch.filter((o) => o.url_checked_at && o.url_checked_at >= run.startedAt);
   const gone = done.filter((o) => o.url_state === 'gone').length;
   const closed = done.filter((o) => o.url_state === 'closed').length;
   const unknown = done.filter((o) => o.url_state === 'unknown').length;
   const parts = [];
-  if (aliveRun.ingested) parts.push(`${aliveRun.ingested} nouvelle${aliveRun.ingested > 1 ? 's' : ''}`);
+  if (run.ingested) parts.push(`${run.ingested} nouvelle${run.ingested > 1 ? 's' : ''}`);
   parts.push(`${gone} disparue${gone > 1 ? 's' : ''}`);
   if (closed) parts.push(`${closed} close${closed > 1 ? 's' : ''}`);
   parts.push(`${unknown} non vérifiable${unknown > 1 ? 's' : ''}`);
@@ -1055,20 +1086,24 @@ function aliveSummary(batch, incomplete) {
 function stopAliveCheck(message) {
   clearTimeout(aliveTimer);
   aliveTimer = null;
-  aliveRun = null;
-  const b = $('#checkAlive');
-  b.disabled = false;
-  b.textContent = ALIVE_LABEL;
+  const run = state.alive;
+  state.alive = null;
+  const b = run && aliveButton(run.status);
+  if (b) {
+    b.disabled = false;
+    b.textContent = b.dataset.label || ALIVE_LABEL;
+  }
   if (message) toast(message, 4000);
 }
 
 async function pollAlive() {
-  if (!aliveRun) return;
+  const run = state.alive;
+  if (!run) return;
   await load(true);
-  if (!aliveRun) return;   // arrêté pendant le chargement (changement de vue)
-  const batch = aliveBatch();
-  const pending = batch.some((o) => !o.url_checked_at || o.url_checked_at < aliveRun.startedAt);
-  const late = Date.now() - aliveRun.since > ALIVE_MAX_MS;
+  if (!state.alive) return;   // arrêté pendant le chargement (changement de vue)
+  const batch = aliveBatch(run.status);
+  const pending = batch.some((o) => !o.url_checked_at || o.url_checked_at < run.startedAt);
+  const late = Date.now() - run.since > ALIVE_MAX_MS;
   if (!pending || late) {
     stopAliveCheck(aliveSummary(batch, pending));
     return;
@@ -1076,32 +1111,37 @@ async function pollAlive() {
   aliveTimer = setTimeout(pollAlive, ALIVE_POLL_MS);
 }
 
-$('#checkAlive').onclick = async () => {
-  if (aliveRun) return;
-  const b = $('#checkAlive');
-  b.disabled = true;
-  b.textContent = 'vérification…';
+async function runAliveCheck(status, b) {
+  if (state.alive) return;
+  if (b) { b.disabled = true; b.textContent = 'vérification…'; }
   let d;
   try {
-    const r = await fetch('/api/offers/check-alive', { method: 'POST' });
+    const r = await fetch('/api/offers/check-alive?status=' + encodeURIComponent(status),
+      { method: 'POST' });
     d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error || 'HTTP ' + r.status);
   } catch (e) {
-    stopAliveCheck('Vérification impossible : ' + e.message);
+    if (b) { b.disabled = false; b.textContent = b.dataset.label || ALIVE_LABEL; }
+    toast('Vérification impossible : ' + e.message, 4000);
     return;
   }
-  aliveRun = { startedAt: d.started_at || '', since: Date.now(), ingested: d.ingested || 0 };
+  state.alive = { status, startedAt: d.started_at || '', since: Date.now(), ingested: d.ingested || 0 };
   if (!d.running) {
     await load(true);
-    stopAliveCheck(d.ingested ? aliveSummary(aliveBatch(), false) : 'Aucune offre à vérifier');
+    stopAliveCheck(d.ingested ? aliveSummary(aliveBatch(status), false) : 'Aucune offre à vérifier');
     return;
   }
   pollAlive();
-};
+}
 
-// Quitter la vue « Nouvelles » arrête le suivi (la vérification continue côté serveur).
+$('#checkAlive').onclick = () => runAliveCheck('new', $('#checkAlive'));
+
+// Quitter la vue concernée arrête le suivi (la vérification continue côté serveur).
 window.addEventListener('hashchange', () => {
-  if (state.view !== 'new' && aliveRun) stopAliveCheck();
+  const run = state.alive;
+  if (!run) return;
+  const view = run.status === 'new' ? 'new' : 'pipeline';
+  if (state.view !== view) stopAliveCheck();
 });
 
 state.tabs = loadTabs();

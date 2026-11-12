@@ -660,6 +660,91 @@ def test_check_alive_endpoint_offline():
     check(all("alive-kept" not in u for u in seen), "aucune sonde sur une offre suivie")
 
 
+def test_shortlist_check_column():
+    """La colonne « À postuler » se vérifie aussi, sans relire l'inbox."""
+    import app as app_module
+    import liveness
+    from fastapi import HTTPException
+
+    live, _ = db.upsert_offer({"url": "https://job/shortlist-live", "title": "Data Scientist"})
+    dead, _ = db.upsert_offer({"url": "https://job/shortlist-dead", "title": "Data Analyst"})
+    blank, _ = db.upsert_offer({"url": "  ", "title": "Sans URL"})
+    sent, _ = db.upsert_offer({"url": "https://job/already-sent", "title": "Déjà postulé"})
+    with db.conn() as c:
+        for oid in (live, dead, blank):
+            db.set_status(c, oid, "shortlist")
+        db.set_status(c, sent, "applied")
+
+    ids = [oid for oid, _ in db.offers_to_check("shortlist")]
+    check(live in ids and dead in ids, "les offres « À postuler » sont à vérifier")
+    check(sent not in ids, "une candidature déjà envoyée n'est pas sondée")
+    check(blank not in ids, "sans URL http(s) : rien à sonder")
+    both = [oid for oid, _ in db.offers_to_check(("shortlist", "applied"))]
+    check(sent in both and live in both, "offers_to_check accepte plusieurs statuts")
+
+    calls = []
+
+    def fake_probe(url, timeout=8.0):
+        calls.append(url)
+        return ("gone", 404) if url.endswith("dead") else ("ok", 200)
+
+    def no_ingest(verbose=False):
+        raise AssertionError("l'inbox ne doit pas être relue pour une colonne du suivi")
+
+    old_probe, old_ingest = liveness.probe, ingest.ingest_inbox
+    liveness.probe, ingest.ingest_inbox = fake_probe, no_ingest
+    try:
+        try:
+            app_module.check_alive("applied")
+            raise AssertionError("colonne non vérifiable acceptée")
+        except HTTPException as e:
+            check(e.status_code == 400, "colonne suivie : vérification refusée")
+
+        out = app_module.check_alive("shortlist")
+        check(out["status"] == "shortlist" and out["ingested"] == 0,
+              f"réponse de l'endpoint colonne : {out}")
+        check(out["running"] is True and out["queued"] >= 2,
+              "le lot porte sur les annonces À postuler")
+        liveness._thread.join(timeout=10)
+        check(not liveness._thread.is_alive(), "le lot de la colonne se termine")
+    finally:
+        liveness.probe, ingest.ingest_inbox = old_probe, old_ingest
+
+    with db.conn() as c:
+        st = {r["id"]: r["url_state"] for r in c.execute(
+            "SELECT id, url_state FROM offers WHERE id IN (?,?,?,?)", (live, dead, blank, sent))}
+    check(st[dead] == "gone" and st[live] == "ok", "404 → disparue, 200 → répond (colonne)")
+    check(st[sent] is None, "l'offre déjà postulée reste non vérifiée")
+    check(all("already-sent" not in u for u in calls), "aucune sonde sur une candidature envoyée")
+
+
+def test_shortlist_check_assets():
+    """Le bouton « vérifier » de la colonne À postuler est câblé — et lui seul."""
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    pipe = js.split("function renderPipeline")[1].split("async function move")[0]
+    card = js.split("function cardPipe")[1].split("function renderNew")[0]
+    alive = js.split("const ALIVE_LABEL")[1].split("state.tabs = loadTabs()")[0]
+
+    check("const LIVENESS_COLS = ['shortlist'];" in js,
+          "seule la colonne À postuler est vérifiable")
+    check("LIVENESS_COLS.includes(st)" in js,
+          "le bouton est conditionné à LIVENESS_COLS")
+    check('data-check="${st}"' in js and "colCheckBtn(st)" in pipe,
+          "l'entête de la colonne porte le bouton")
+    check("runAliveCheck(b.dataset.check, b)" in pipe, "bouton de colonne câblé")
+    check("o.status === 'shortlist' ? aliveChip(o) : ''" in card,
+          "la puce de résultat apparaît sur les cartes À postuler")
+    check("function aliveBatch(status)" in alive and "o.status === status" in alive,
+          "le lot porte sur le statut demandé")
+    check("'/api/offers/check-alive?status=' + encodeURIComponent(status)" in alive,
+          "l'endpoint reçoit le statut")
+    check("runAliveCheck('new', $('#checkAlive'))" in js,
+          "la vue Nouvelles garde son bouton")
+    check("run.status === 'new' ? 'new' : 'pipeline'" in alive,
+          "quitter la vue concernée arrête le suivi")
+    check("aliveRun" not in js, "l'ancien état global unique a disparu")
+
+
 def test_gone_offers_hidden():
     """Les annonces disparues ou closes sont masquées par défaut, jamais supprimées."""
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
@@ -697,6 +782,7 @@ if __name__ == "__main__":
                test_apply_trigger_and_manual_override, test_config_paths,
                test_prompt_paths, test_health_redaction, test_worker_command,
                test_liveness_classify, test_liveness_closed_page, test_url_state_migration,
-               test_check_alive_endpoint_offline, test_gone_offers_hidden):
+               test_check_alive_endpoint_offline, test_shortlist_check_column,
+               test_shortlist_check_assets, test_gone_offers_hidden):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
