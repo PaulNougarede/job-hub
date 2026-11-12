@@ -773,6 +773,27 @@ def test_gone_offers_hidden():
           "les puces distinguent disparue, close et non vérifiable")
 
 
+def test_stale_offers_hidden():
+    """Une « nouvelle » offre trop vieille est masquée comme une morte : la vue
+    est une file d'actualité, pas un stock. Filtre d'affichage, zéro écriture."""
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    new_view = js.split("function renderNew")[1].split("function renderPipeline")[0]
+    stats = js.split("function renderStats")[1].split("function ")[0]
+
+    check("const EXPIRY_DAYS = 14" in js, "le seuil d'ancienneté est nommé (14 jours)")
+    check("function ageDays" in js, "l'âge d'une offre est calculé depuis found_at")
+    check("ageDays(o) > EXPIRY_DAYS" in js,
+          "isExpired couvre aussi l'ancienneté, pas seulement le lien mort")
+    check("Number.isFinite(t)" in js or "isFinite" in js,
+          "une date absente ou invalide ne périme pas l'offre")
+    check("all.filter((o) => !isExpired(o))" in new_view,
+          "la grille applique le seuil")
+    check("!isExpired(o)).length" in stats and "s.by_status.new" in stats,
+          "le badge compte les offres affichables, avec repli sur les stats serveur")
+    check("DELETE" not in new_view and "/api/offers/" not in new_view,
+          "masquer reste un filtre d'affichage : aucun appel d'écriture")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -783,6 +804,7 @@ if __name__ == "__main__":
                test_prompt_paths, test_health_redaction, test_worker_command,
                test_liveness_classify, test_liveness_closed_page, test_url_state_migration,
                test_check_alive_endpoint_offline, test_shortlist_check_column,
-               test_shortlist_check_assets, test_gone_offers_hidden):
+               test_shortlist_check_assets, test_gone_offers_hidden,
+               test_stale_offers_hidden):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

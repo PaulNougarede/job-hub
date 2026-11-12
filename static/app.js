@@ -240,7 +240,13 @@ function renderSources() {
 
 function renderStats() {
   const s = state.stats || { by_status: {} };
-  const n = s.by_status.new || 0;
+  /* Le compteur de l'onglet annonce ce qui est réellement affichable : les
+     périmées (mortes ou trop vieilles) sont masquées et ne gonflent plus le
+     badge. Repli sur les stats serveur tant que le board n'est pas chargé. */
+  const all = Array.isArray(state.offers) ? state.offers : [];
+  const n = all.length
+    ? all.filter((o) => o.status === 'new' && !isExpired(o)).length
+    : (s.by_status.new || 0);
   const badge = $('#badgeNew');
   badge.textContent = n;
   badge.classList.toggle('zero', n === 0);
@@ -272,10 +278,18 @@ function aliveChip(o) {
   return '';
 }
 
-/* Expirée : disparue (404, redirection d'expiration) ou en ligne sans candidatures.
-   Dans les deux cas, plus rien à postuler — masquée par défaut. */
+/* Périmée : disparue (404, redirection d'expiration), en ligne sans candidatures,
+   ou trop vieille pour valoir une candidature. Dans tous les cas, plus rien à
+   postuler — masquée par défaut, jamais supprimée. */
+const EXPIRY_DAYS = 14;   // au-delà, une annonce « nouvelle » n'intéresse plus Paul
+function ageDays(o) {
+  if (!o.found_at) return 0;
+  const t = new Date(o.found_at).getTime();
+  return Number.isFinite(t) ? (Date.now() - t) / 86400000 : 0;
+}
 function isExpired(o) {
-  return o.url_state === 'gone' || o.url_state === 'closed';
+  return o.url_state === 'gone' || o.url_state === 'closed'
+    || ageDays(o) > EXPIRY_DAYS;
 }
 
 function cardNew(o) {
