@@ -281,7 +281,7 @@ function aliveChip(o) {
 /* Périmée : disparue (404, redirection d'expiration), en ligne sans candidatures,
    ou trop vieille pour valoir une candidature. Dans tous les cas, plus rien à
    postuler — masquée par défaut, jamais supprimée. */
-const EXPIRY_DAYS = 14;   // au-delà, une annonce « nouvelle » n'intéresse plus Paul
+const EXPIRY_DAYS = 30;   // au-delà, une annonce « nouvelle » n'intéresse plus Paul
 function ageDays(o) {
   if (!o.found_at) return 0;
   const t = new Date(o.found_at).getTime();
