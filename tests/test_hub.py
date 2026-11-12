@@ -780,7 +780,7 @@ def test_stale_offers_hidden():
     new_view = js.split("function renderNew")[1].split("function renderPipeline")[0]
     stats = js.split("function renderStats")[1].split("function ")[0]
 
-    check("const EXPIRY_DAYS = 14" in js, "le seuil d'ancienneté est nommé (14 jours)")
+    check("const EXPIRY_DAYS = 30" in js, "le seuil d'ancienneté est nommé (30 jours)")
     check("function ageDays" in js, "l'âge d'une offre est calculé depuis found_at")
     check("ageDays(o) > EXPIRY_DAYS" in js,
           "isExpired couvre aussi l'ancienneté, pas seulement le lien mort")
