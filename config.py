@@ -53,3 +53,22 @@ OWNER_NAME = os.environ.get("HUB_OWNER_NAME", "Paul Nougarède").strip()
 
 # Budget d'un run d'adaptation, en secondes.
 RUN_BUDGET = int(os.environ.get("HUB_RUN_BUDGET", "2700"))
+
+# --- Démarches France Travail (outil « Organisation des démarches ») --------
+# Un JSON + un log par candidature.
+FT_DIR = _path("HUB_FT_DIR", LOG_DIR / "ft")
+
+# Budget d'un passage de l'agent sur l'espace France Travail, en secondes.
+FT_BUDGET = int(os.environ.get("HUB_FT_BUDGET", "900"))
+
+# Attente maximale d'un « go » sur Telegram avant abandon, en secondes.
+FT_GO_TIMEOUT = int(os.environ.get("HUB_FT_GO_TIMEOUT", "1800"))
+
+# Bot Telegram dédié aux questions du hub. L'un des deux manquant : aucune
+# démarche n'est créée (l'accord de Paul est une condition, pas un confort).
+TG_TOKEN = os.environ.get("HUB_TELEGRAM_BOT_TOKEN", "").strip()
+TG_CHAT_ID = os.environ.get("HUB_TELEGRAM_CHAT_ID", "").strip()
+
+# Identifiant France Travail : hors du dépôt, il vit dans `.env`. Un identifiant
+# n'est pas un secret, mais il n'a rien à faire dans un dépôt publiable.
+FT_IDENTIFIER = os.environ.get("HUB_FT_IDENTIFIER", "").strip()

@@ -88,6 +88,9 @@ MIGRATIONS = {
     "apply_note": "TEXT",       # une phrase : pourquoi ce lien
     "url_state": "TEXT",        # ok|gone|unknown|NULL : l'annonce d'origine répond-elle encore ?
     "url_checked_at": "TEXT",
+    "ft_state": "TEXT",         # démarches France Travail : voir FT_STATES
+    "ft_at": "TEXT",
+    "ft_note": "TEXT",          # question posée, ou raison de l'échec
 }
 
 # Résultats possibles d'une vérification de l'URL d'origine (voir liveness.py).
@@ -318,6 +321,40 @@ def next_apply_job(c: sqlite3.Connection) -> dict | None:
     """Prochaine offre à traiter, la plus ancienne d'abord."""
     r = c.execute(
         "SELECT * FROM offers WHERE apply_state = 'queued' ORDER BY updated_at ASC LIMIT 1"
+    ).fetchone()
+    return dict(r) if r else None
+
+
+# --- Démarches France Travail (voir ftdemarches.py) ------------------------
+# `awaiting_go` = question posée sur Telegram ; `filling` = agent au travail ;
+# `blocked` = pas de bot configuré (échec fermé) ; `declined`/`expired` = pas
+# d'accord ; `partial` = certaines démarches déjà présentes.
+FT_STATES = ("idle", "queued", "awaiting_go", "filling", "done", "partial",
+             "declined", "expired", "blocked", "failed")
+
+
+def ft_state(c: sqlite3.Connection, offer_id: int) -> str:
+    r = c.execute("SELECT ft_state FROM offers WHERE id = ?", (offer_id,)).fetchone()
+    return (r["ft_state"] if r and r["ft_state"] else "idle")
+
+
+def set_ft(c: sqlite3.Connection, offer_id: int, state: str, note: str | None = None) -> None:
+    """Met à jour l'état des démarches France Travail d'une offre."""
+    if state not in FT_STATES:
+        raise ValueError(f"état de démarches inconnu: {state}")
+    c.execute(
+        "UPDATE offers SET ft_state = ?, ft_note = COALESCE(?, ft_note), ft_at = ?,"
+        " updated_at = ? WHERE id = ?",
+        (state, note, now(), now(), offer_id),
+    )
+    if state in ("done", "partial", "failed", "declined", "expired", "blocked"):
+        log_event(c, offer_id, f"ft_{state}", (note or "")[:400])
+
+
+def next_ft_job(c: sqlite3.Connection) -> dict | None:
+    """Prochaine offre dont les démarches sont à créer."""
+    r = c.execute(
+        "SELECT * FROM offers WHERE ft_state = 'queued' ORDER BY updated_at ASC LIMIT 1"
     ).fetchone()
     return dict(r) if r else None
 

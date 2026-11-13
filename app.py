@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 import config
 import db
 import files as docfiles
+import ftdemarches
 import ingest
 import linkhunt
 import liveness
@@ -68,6 +69,7 @@ async def lifespan(_app: FastAPI):
     ingest.ingest_inbox()
     worker.start()
     linkhunt.start()
+    ftdemarches.start()
     threading.Thread(target=_watch_inbox, name="inbox-watch", daemon=True).start()
     try:
         yield
@@ -75,6 +77,7 @@ async def lifespan(_app: FastAPI):
         _watch_stop.set()
         worker.stop()
         linkhunt.stop()
+        ftdemarches.stop()
 
 
 app = FastAPI(title="Job Hub", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -252,6 +255,13 @@ def patch_offer(oid: int, payload: OfferPatch):
             linkhunt.enqueue(oid)
         except Exception as e:  # pragma: no cover
             print(f"[linkhunt] enqueue {oid}: {type(e).__name__}: {e}", flush=True)
+    # Passer une offre en « postulé » est le signal qui déclenche les démarches
+    # France Travail. Rien n'est écrit avant un « go » explicite sur Telegram.
+    if status == "applied" and prev_status != "applied":
+        try:
+            ftdemarches.enqueue(oid)
+        except Exception as e:  # pragma: no cover
+            print(f"[ft] enqueue {oid}: {type(e).__name__}: {e}", flush=True)
     return {"ok": True}
 
 
@@ -263,6 +273,17 @@ def hunt_apply_link(oid: int):
     except KeyError:
         raise HTTPException(404, "offre inconnue")
     return {"ok": True, "apply_state": state}
+
+
+@app.post("/api/offers/{oid}/ft-demarches")
+def create_ft_demarches(oid: int):
+    """Relance la création des démarches France Travail (après un refus, une
+    expiration ou un échec). Demande de nouveau l'accord sur Telegram."""
+    try:
+        state = ftdemarches.enqueue(oid, force=True)
+    except KeyError:
+        raise HTTPException(404, "offre inconnue")
+    return {"ok": True, "ft_state": state}
 
 
 @app.delete("/api/offers/{oid}")
