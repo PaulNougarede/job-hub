@@ -73,6 +73,18 @@ function shortList(str, n = 4) {
 
 const APPLY_KIND = { site: "site de l’entreprise", ats: 'ATS', board: 'job board', manual: 'saisi à la main' };
 const APPLY_CONF = { high: 'confiance élevée', medium: 'confiance moyenne', low: 'confiance faible' };
+const FT_LABELS = {
+  idle: 'pas de démarche demandée',
+  queued: 'en file',
+  awaiting_go: 'question posée sur Telegram, en attente de ta réponse',
+  filling: 'agent au travail — approuve la connexion sur ton téléphone',
+  done: 'trois démarches créées',
+  partial: 'créées en partie',
+  declined: 'refusé par toi',
+  expired: 'expiré — pas de réponse dans les 30 minutes',
+  blocked: 'impossible : bot Telegram non configuré',
+  failed: 'échec',
+};
 
 function applyBusy(o) {
   return !!(o.apply && (o.apply.state === 'queued' || o.apply.state === 'running'));
@@ -745,6 +757,18 @@ function stepsHtml(o) {
   }).join('') + (o.status === 'rejected' ? '<span class="step now bad">Refusé</span>' : '');
 }
 
+function ftPanel(o) {
+  const ft = o.ft || { state: 'idle' };
+  const busy = ft.state === 'queued' || ft.state === 'awaiting_go' || ft.state === 'filling';
+  const withNote = ['declined', 'expired', 'failed', 'partial', 'blocked'].includes(ft.state);
+  const note = withNote && ft.note
+    ? `<p class="hint-line">${esc(ft.note.length > 220 ? ft.note.slice(0, 220) + '…' : ft.note)}</p>`
+    : '';
+  return `<div class="state"><span>${esc(FT_LABELS[ft.state] || ft.state)}</span></div>
+    ${note}
+    <button class="btn small ghost" id="oFt"${busy ? ' disabled' : ''}>${ft.state === 'done' ? 'refaire les démarches' : 'créer les démarches'}</button>`;
+}
+
 function applyPanel(o) {
   const a = o.apply || { state: 'idle' };
   let body = '';
@@ -954,6 +978,11 @@ function renderOffer(o) {
         </section>
 
         <section class="panel">
+          <p class="sect-title">France Travail</p>
+          ${ftPanel(o)}
+        </section>
+
+        <section class="panel">
           <p class="sect-title">Détails</p>
           <dl class="kv">
             <dt>Entreprise</dt><dd>${esc(o.company || '—')}</dd>
@@ -995,6 +1024,16 @@ function renderOffer(o) {
       body: JSON.stringify({ apply_url: url })
     });
     toast(url ? 'Lien de candidature enregistré' : 'Lien de candidature effacé');
+    load(true); fetchOffer(o.id);
+  };
+  $('#oFt').onclick = async () => {
+    if (!confirm('Envoyer la question sur Telegram pour créer les trois démarches France Travail ?'
+                 + '\n\nRien ne sera écrit dans ton espace avant ton « go ».')) return;
+    const r = await fetch('/api/offers/' + o.id + '/ft-demarches', { method: 'POST' });
+    const j = await r.json().catch(() => ({}));
+    if (j.ft_state === 'blocked') toast('Bot Telegram non configuré : rien envoyé');
+    else if (j.ft_state && j.ft_state !== 'failed') toast('Question envoyée sur Telegram');
+    else toast('Demande impossible');
     load(true); fetchOffer(o.id);
   };
   $('#oDelete').onclick = async () => {
