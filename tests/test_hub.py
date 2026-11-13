@@ -833,13 +833,20 @@ def test_ft_reply_and_fail_closed():
     oid, _ = db.upsert_offer({"url": "http://job/ft-offline", "title": "Data Scientist",
                               "company": "Gamma"})
     check(oid is not None, "offre de test créée")
-    check(not ft.configured(), "aucun bot Telegram dans l'environnement de test")
-    check(ft.enqueue(oid) == "blocked", "sans Telegram : bloqué, donc rien n'est écrit")
-    with db.conn() as c:
-        row = c.execute("SELECT ft_state, ft_note FROM offers WHERE id=?",
-                        (oid,)).fetchone()
-    check(row["ft_state"] == "blocked" and "Telegram" in (row["ft_note"] or ""),
-          "le blocage est tracé sur l'offre avec sa raison")
+    # Le test est hermétique : un `.env` exporté dans le shell ne doit pas le
+    # faire passer pour configuré.
+    saved = (ft.TG_TOKEN, ft.TG_CHAT_ID)
+    ft.TG_TOKEN = ft.TG_CHAT_ID = ""
+    try:
+        check(not ft.configured(), "sans identifiants, le bot n'est pas configuré")
+        check(ft.enqueue(oid) == "blocked", "sans Telegram : bloqué, rien n'est écrit")
+        with db.conn() as c:
+            row = c.execute("SELECT ft_state, ft_note FROM offers WHERE id=?",
+                            (oid,)).fetchone()
+        check(row["ft_state"] == "blocked" and "Telegram" in (row["ft_note"] or ""),
+              "le blocage est tracé sur l'offre avec sa raison")
+    finally:
+        ft.TG_TOKEN, ft.TG_CHAT_ID = saved
 
 
 def test_ft_prompt_and_command():
@@ -872,17 +879,62 @@ def test_ft_trigger_on_applied():
                               "company": "Delta"})
     with db.conn() as c:
         check(db.ft_state(c, oid) == "idle", "une nouvelle offre ne demande rien")
-    app_module.patch_offer(oid, app_module.OfferPatch(status="applied"))
-    with db.conn() as c:
-        check(db.ft_state(c, oid) == "blocked",
-              "passage en postulé déclenche (bloqué ici faute de bot)")
+    saved = (ft.TG_TOKEN, ft.TG_CHAT_ID)
+    ft.TG_TOKEN = ft.TG_CHAT_ID = ""
+    try:
+        app_module.patch_offer(oid, app_module.OfferPatch(status="applied"))
+        with db.conn() as c:
+            check(db.ft_state(c, oid) == "blocked",
+                  "passage en postulé déclenche (bloqué ici faute de bot)")
 
-    # Une offre déjà traitée ne repart pas toute seule : pas de doublon.
+        # Une offre déjà traitée ne repart pas toute seule : pas de doublon.
+        with db.conn() as c:
+            db.set_ft(c, oid, "done", note="trois démarches créées")
+        check(ft.enqueue(oid) == "done", "une offre déjà traitée n'est pas relancée")
+        check(ft.enqueue(oid, force=True) == "blocked",
+              "relance explicite possible (bouton), toujours soumise au go")
+    finally:
+        ft.TG_TOKEN, ft.TG_CHAT_ID = saved
+
+
+def test_ft_detail_panel_assets():
+    """La fiche d'offre expose l'état des démarches et un bouton de relance."""
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    panel = js.split("function ftPanel")[1].split("function applyPanel")[0]
+    check("FT_LABELS" in js and "expiré — pas de réponse dans les 30 minutes" in js,
+          "les états des démarches sont traduits en clair")
+    check("id=\"oFt\"" in panel, "la fiche a un bouton dédié")
+    check("disabled" in panel, "le bouton est inactif pendant un traitement")
+    check("'créer les démarches'" in panel and "'refaire les démarches'" in panel,
+          "le libellé change une fois les démarches créées")
+    check("['declined', 'expired', 'failed', 'partial', 'blocked']" in panel,
+          "les états d'échec affichent leur raison")
+
+    wiring = js.split("$('#oFt').onclick")[1].split("$('#oDelete').onclick")[0]
+    check("/ft-demarches" in wiring and "method: 'POST'" in wiring,
+          "le bouton appelle la route de relance")
+    check("confirm(" in wiring, "la relance demande confirmation avant d'envoyer")
+    check("api/offers/" in wiring and "PATCH" not in wiring and "DELETE" not in wiring,
+          "le bouton ne modifie ni l'offre ni son statut")
+
+    check('<p class="sect-title">France Travail</p>' in js
+          and "${ftPanel(o)}" in js, "un panneau France Travail est rendu dans le rail")
+    check(js.count("${ftPanel(o)}") == 1,
+          "le panneau est rendu une seule fois (l'autre occurrence est sa définition)")
+
+
+def test_ft_payload_exposed():
+    """GET /api/offers/<id> expose l'état des démarches en objet `ft`."""
+    import app as app_module
+
+    oid, _ = db.upsert_offer({"url": "http://job/ft-payload", "title": "ML Ops",
+                              "company": "Epsilon"})
     with db.conn() as c:
-        db.set_ft(c, oid, "done", note="trois démarches créées")
-    check(ft.enqueue(oid) == "done", "une offre déjà traitée n'est pas relancée")
-    check(ft.enqueue(oid, force=True) == "blocked",
-          "relance explicite possible (bouton), toujours soumise au go")
+        db.set_ft(c, oid, "declined", note="refusé sur Telegram")
+    payload = app_module.get_offer(oid)
+    check(payload["ft"]["state"] == "declined", "l'état est servi dans `ft.state`")
+    check(payload["ft"]["note"] == "refusé sur Telegram", "la raison accompagne l'état")
+    check("ft_state" not in payload, "les colonnes brutes ne fuient pas dans la réponse")
 
 
 if __name__ == "__main__":
@@ -898,6 +950,7 @@ if __name__ == "__main__":
                test_shortlist_check_assets, test_gone_offers_hidden,
                test_stale_offers_hidden, test_ft_payload_and_message,
                test_ft_reply_and_fail_closed, test_ft_prompt_and_command,
-               test_ft_trigger_on_applied):
+               test_ft_trigger_on_applied, test_ft_detail_panel_assets,
+               test_ft_payload_exposed):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

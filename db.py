@@ -146,6 +146,12 @@ def row_to_offer(r: sqlite3.Row, run: dict | None = None) -> dict:
         "note": d.pop("apply_note", None),
         "at": d.pop("apply_at", None),
     }
+    # Démarches France Travail : même forme que `apply`, l'état vit sur l'offre.
+    d["ft"] = {
+        "state": d.pop("ft_state", None) or "idle",
+        "note": d.pop("ft_note", None),
+        "at": d.pop("ft_at", None),
+    }
     # Vérification de l'annonce d'origine : toujours présentes, même à None.
     d["url_state"] = d.get("url_state")
     d["url_checked_at"] = d.get("url_checked_at")
