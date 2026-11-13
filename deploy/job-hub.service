@@ -1,0 +1,31 @@
+# Unité systemd --user du hub — copie de référence, versionnée avec le code.
+#
+# Installation sur le serveur :
+#   cp deploy/job-hub.service ~/.config/systemd/user/job-hub.service
+#   systemctl --user daemon-reload && systemctl --user restart job-hub
+#
+# `KillMode=process` (la ligne qui compte) : à l'arrêt ou au redémarrage,
+# systemd ne signale que le process principal (uvicorn) et laisse vivre les
+# enfants. Sans elle, tout le cgroup est tué et un run d'adaptation en cours
+# meurt au milieu du travail (issue #5). L'agent lancé par worker.py reste donc
+# vivant pendant un `systemctl --user restart job-hub` ; au retour, worker.py
+# l'adopte (suivi de /proc) et clôt le run quand il a fini.
+[Unit]
+Description=Job hub — tableau de bord des candidatures
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/paul/job-hub
+Environment=HOME=/home/paul
+Environment=PATH=/home/paul/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+ExecStart=/home/paul/job-hub/start.sh
+KillMode=process
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/paul/job-hub/logs/service.log
+StandardError=append:/home/paul/job-hub/logs/service.log
+
+[Install]
+WantedBy=default.target
