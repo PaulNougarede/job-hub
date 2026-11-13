@@ -12,7 +12,9 @@ transporter l'offre et vérifier le résultat.
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -193,40 +195,126 @@ def build_command(prompt_path: Path) -> list[str]:
     ]
 
 
-def _run_one(run_row: dict) -> None:
-    rid, offer_id = run_row["id"], run_row["offer_id"]
-    with db.conn() as c:
-        offer = dict(c.execute("SELECT * FROM offers WHERE id = ?", (offer_id,)).fetchone())
-        c.execute("UPDATE runs SET state='running', started_at=? WHERE id=?", (db.now(), rid))
-    prompt, dirname = build_prompt(offer)
-    PROMPT_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    prompt_path = PROMPT_DIR / f"run_{rid}.txt"
-    prompt_path.write_text(prompt, encoding="utf-8")
-    log_path = LOG_DIR / f"run_{rid}.log"
-    expected = CV_OUTPUT / dirname
-    started = time.time()
+def _spawn(cmd: list[str], log_path: Path, rid: int) -> subprocess.Popen:
+    """Lance l'agent dans sa **propre session**, pid tracé en base.
 
-    cmd = build_command(prompt_path)
-    ok, error = False, None
+    `start_new_session=True` détache l'agent de la session du hub : les signaux
+    envoyés à uvicorn (arrêt, Ctrl-C) ne l'atteignent pas. Combiné à
+    `KillMode=process` dans l'unité systemd (deploy/job-hub.service), un
+    `systemctl --user restart job-hub` ne tue plus le run en cours : le pid
+    survit, `recover()` le récupère au démarrage suivant.
+    """
+    log = log_path.open("w", encoding="utf-8")
     try:
-        with log_path.open("w", encoding="utf-8") as log:
-            log.write(f"$ {' '.join(cmd)}\n\n")
-            log.flush()
-            proc = subprocess.run(
-                cmd, cwd=str(CV_TAILOR), stdout=log, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, timeout=RUN_BUDGET + 300,
-            )
-        ok = proc.returncode == 0
-        if not ok:
-            error = f"hermes a quitté avec le code {proc.returncode}"
-    except subprocess.TimeoutExpired:
-        error = f"timeout après {RUN_BUDGET + 300}s"
-    except Exception as e:  # pragma: no cover
-        error = f"{type(e).__name__}: {e}"
+        log.write(f"$ {' '.join(cmd)}\n\n")
+        log.flush()
+        proc = subprocess.Popen(
+            cmd, cwd=str(CV_TAILOR), stdout=log, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+    finally:
+        log.close()  # l'enfant garde son propre descripteur
+    with db.conn() as c:
+        c.execute("UPDATE runs SET pid=? WHERE id=?", (proc.pid, rid))
+    return proc
 
-    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
-    manifest_path = _find_manifest(started, expected, log_text)
+
+def _kill_group(pid: int, grace: float = 10.0) -> None:
+    """SIGTERM au groupe de l'agent, SIGKILL s'il traîne (il a sa propre session)."""
+    try:
+        pgid = os.getpgid(pid)
+    except (ProcessLookupError, PermissionError):
+        return
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5.0)):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.5)
+
+
+def _wait(proc: subprocess.Popen, budget: float) -> tuple[int | None, bool]:
+    """Attend la fin de l'agent ; retourne (code, timeout_atteint)."""
+    deadline = time.time() + budget
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            return rc, False
+        if time.time() > deadline:
+            _kill_group(proc.pid)
+            try:
+                return proc.wait(timeout=30), True
+            except subprocess.TimeoutExpired:  # pragma: no cover
+                return None, True
+        time.sleep(2)
+
+
+def _pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (TypeError, ValueError, OSError):
+        return False
+    return True
+
+
+def _is_run_process(pid: int | None, rid: int) -> bool:
+    """Ce pid est-il encore l'agent du run #rid ? (relecture de /proc)
+
+    Un pid peut avoir été recyclé par un autre process après le redémarrage du
+    hub : on ne se fie pas au numéro seul, on cherche `run_<rid>.txt` dans la
+    ligne de commande, que `build_command` passe en `--query-file`.
+    """
+    if not _pid_alive(pid) or not isinstance(pid, int):
+        return False
+    try:
+        parts = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return True  # pas de /proc (portabilité) : le pid vivant suffit
+    return any(f"run_{rid}.txt".encode() in p for p in parts)
+
+
+def _log_text(log_path: Path) -> str:
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _expected_dir(rid: int) -> Path | None:
+    """Dossier de sortie attendu, relu dans le prompt du run (daté du lancement)."""
+    m = re.search(r"Dossier de sortie obligatoire\s*:\s*(\S+)", _log_text(PROMPT_DIR / f"run_{rid}.txt"))
+    return Path(m.group(1)) if m else None
+
+
+def _started_epoch(started_at: str | None) -> float:
+    if not started_at:
+        return time.time()
+    try:
+        return datetime.fromisoformat(started_at).timestamp()
+    except ValueError:
+        return time.time()
+
+
+def _finalize(rid: int, offer_id: int, *, ok: bool, error: str | None,
+              started: float, expected: Path | None, log_path: Path) -> None:
+    """Clôt un run : manifest, fichiers, état, événement. Idempotent.
+
+    Appelé par le thread qui a lancé l'agent **et** par celui qui adopte un run
+    survivant à un redémarrage — d'où la signature explicite.
+    """
+    manifest_path = _find_manifest(started, expected or CV_OUTPUT, _log_text(log_path))
     manifest, files, out_dir = None, {}, None
     if manifest_path:
         try:
@@ -242,6 +330,8 @@ def _run_one(run_row: dict) -> None:
         if manifest and manifest.get("status") not in (None, "ok"):
             ok = False
             error = error or manifest.get("error") or f"status {manifest.get('status')}"
+        elif manifest:
+            ok = True  # un manifest valide vaut mieux qu'un code de sortie inconnu
     elif ok:
         error = "run terminé sans manifest.json (fichiers non vérifiables)"
 
@@ -267,15 +357,53 @@ def _run_one(run_row: dict) -> None:
             db.log_event(c, offer_id, "tailor_failed", error or "échec inconnu")
 
 
+def _adopt(rid: int, offer_id: int, pid: int, started: float,
+           expected: Path | None, log_path: Path) -> None:
+    """Suit un agent survivant au redémarrage du hub (il n'est pas notre enfant :
+    pas de `wait()`, on surveille /proc jusqu'à sa disparition)."""
+    while _pid_alive(pid):
+        time.sleep(3)
+    _finalize(rid, offer_id, ok=True, error=None, started=started,
+              expected=expected, log_path=log_path)
+
+
+def _run_one(run_row: dict) -> None:
+    rid, offer_id = run_row["id"], run_row["offer_id"]
+    with db.conn() as c:
+        offer = dict(c.execute("SELECT * FROM offers WHERE id = ?", (offer_id,)).fetchone())
+        c.execute("UPDATE runs SET state='running', started_at=? WHERE id=?", (db.now(), rid))
+    prompt, dirname = build_prompt(offer)
+    PROMPT_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    prompt_path = PROMPT_DIR / f"run_{rid}.txt"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    log_path = LOG_DIR / f"run_{rid}.log"
+    expected = CV_OUTPUT / dirname
+    started = time.time()
+
+    cmd = build_command(prompt_path)
+    rc, error = None, None
+    try:
+        proc = _spawn(cmd, log_path, rid)
+        rc, timed_out = _wait(proc, RUN_BUDGET + 300)
+        if timed_out:
+            error = f"timeout après {RUN_BUDGET + 300}s (agent tué)"
+        elif rc != 0:
+            error = f"hermes a quitté avec le code {rc}"
+    except Exception as e:  # pragma: no cover
+        error = f"{type(e).__name__}: {e}"
+
+    _finalize(rid, offer_id, ok=(rc == 0 and error is None), error=error,
+              started=started, expected=expected, log_path=log_path)
+
+
 def _loop() -> None:
     while not _stop.is_set():
         try:
             with db.conn() as c:
-                row = c.execute(
-                    "SELECT * FROM runs WHERE state='queued' ORDER BY id ASC LIMIT 1"
-                ).fetchone()
+                row = db.next_queued_run(c)
             if row:
-                _run_one(dict(row))
+                _run_one(row)
                 continue
         except Exception as e:  # ne jamais tuer la boucle
             print(f"[worker] {type(e).__name__}: {e}", flush=True)
@@ -283,15 +411,43 @@ def _loop() -> None:
 
 
 def recover() -> None:
-    """Après un redémarrage, un run 'running' est mort : on le marque échoué."""
+    """Au démarrage : adopter les runs vivants, marquer `interrupted` les morts.
+
+    Depuis que l'unité systemd tourne en `KillMode=process` et que l'agent a sa
+    propre session (`_spawn`), un `systemctl --user restart job-hub` ne tue plus
+    l'agent : il finit son travail pendant que le hub redémarre. Au retour, trois
+    cas, dans cet ordre :
+
+    - le manifest est déjà là → on clôt le run normalement (rien à relancer) ;
+    - le pid vit encore et c'est bien cet agent → on l'adopte (`_adopt` suit
+      /proc et clôt à sa sortie) ;
+    - sinon l'agent est mort → `interrupted`, relançable d'un clic.
+    """
     with db.conn() as c:
-        rows = c.execute("SELECT id, offer_id FROM runs WHERE state='running'").fetchall()
-        for r in rows:
+        rows = [dict(r) for r in c.execute("SELECT * FROM runs WHERE state='running'")]
+    for r in rows:
+        rid, offer_id = r["id"], r["offer_id"]
+        expected = _expected_dir(rid)
+        started = _started_epoch(r.get("started_at"))
+        log_path = LOG_DIR / f"run_{rid}.log"
+        if _find_manifest(started, expected or CV_OUTPUT, _log_text(log_path)):
+            _finalize(rid, offer_id, ok=True, error=None, started=started,
+                      expected=expected, log_path=log_path)
+            print(f"[worker] run {rid} : manifest déjà écrit, clôturé", flush=True)
+            continue
+        if _is_run_process(r.get("pid"), rid):
+            print(f"[worker] run {rid} encore vivant (pid {r['pid']}) : adopté", flush=True)
+            threading.Thread(target=_adopt, name=f"adopt-{rid}", daemon=True,
+                             args=(rid, offer_id, int(r["pid"]), started,
+                                   expected, log_path)).start()
+            continue
+        with db.conn() as c:
             c.execute(
-                "UPDATE runs SET state='failed', finished_at=?, error=? WHERE id=?",
-                (db.now(), "interrompu par un redémarrage du hub", r["id"]),
+                "UPDATE runs SET state='interrupted', finished_at=?, error=?, log_path=? WHERE id=?",
+                (db.now(), "interrompu par un redémarrage du hub : l'agent n'a pas "
+                           "survécu (relançable)", str(log_path), rid),
             )
-            db.log_event(c, r["offer_id"], "tailor_failed", "interrompu par un redémarrage")
+            db.log_event(c, offer_id, "tailor_interrupted", "interrompu par un redémarrage")
 
 
 def start() -> None:

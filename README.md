@@ -160,21 +160,28 @@ journalctl --user -u job-hub -f       # logs serveur
 ```
 
 Unité systemd utilisateur minimale (linger activé, pour redémarrer au boot sans
-session ouverte) :
+session ouverte). La copie de référence est versionnée :
+`deploy/job-hub.service` (`cp deploy/job-hub.service ~/.config/systemd/user/`
+puis `systemctl --user daemon-reload`, après toute modification de l'unité).
 
 ```ini
 [Service]
 WorkingDirectory=%h/job-hub
 ExecStart=%h/job-hub/start.sh
+KillMode=process
 Restart=always
 ```
 
 `static/` est servi depuis le disque : une modification de `index.html`,
 `style.css` ou `app.js` ne demande aucun redémarrage.
 
-**Ne pas redémarrer pendant un run d'adaptation** : le run tourne dans le même
-cgroup, un restart tue l'agent au milieu du travail (run marqué `failed`, aucun
-fichier produit). Vérifier via `GET /api/board` qu'aucun run n'est `running`.
+**Redémarrer pendant un run d'adaptation est sans danger** — à condition que
+l'unité porte `KillMode=process` (voir `deploy/job-hub.service`). L'agent lancé
+par `worker.py` a sa propre session : systemd ne signale que uvicorn, l'agent
+continue, et au retour le hub l'adopte (`worker.recover()`) puis clôt le run
+quand le manifest apparaît. Si l'agent est vraiment mort (machine éteinte,
+OOM), le run est marqué `interrupted` et se relance d'un clic depuis la fiche
+de l'offre. Sans `KillMode=process`, tout le cgroup est tué et le run meurt.
 
 ## Sauvegarde
 

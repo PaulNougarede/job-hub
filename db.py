@@ -48,7 +48,8 @@ CREATE INDEX IF NOT EXISTS idx_offers_status ON offers(status, score DESC);
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     offer_id    INTEGER NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
-    state       TEXT NOT NULL DEFAULT 'queued',   -- queued|running|done|failed
+    state       TEXT NOT NULL DEFAULT 'queued',   -- voir RUN_STATES
+    pid         INTEGER,                          -- pid de l'agent, pour l'adopter après un restart
     started_at  TEXT,
     finished_at TEXT,
     output_dir  TEXT,
@@ -93,6 +94,15 @@ MIGRATIONS = {
     "ft_note": "TEXT",          # question posée, ou raison de l'échec
 }
 
+# Colonnes ajoutées après coup à `runs` (même principe additif que MIGRATIONS).
+RUN_MIGRATIONS = {
+    "pid": "INTEGER",          # pid de l'agent lancé, NULL si inconnu/terminé
+}
+
+# États d'un run d'adaptation. `interrupted` = le hub a redémarré et l'agent
+# n'a pas survécu : le run est relançable d'un clic, il n'a rien produit.
+RUN_STATES = ("queued", "running", "done", "failed", "interrupted")
+
 # Résultats possibles d'une vérification de l'URL d'origine (voir liveness.py).
 URL_STATES = ("ok", "gone", "closed", "unknown")
 
@@ -122,6 +132,10 @@ def init_db() -> None:
         for name, coltype in MIGRATIONS.items():
             if name not in have:
                 c.execute(f"ALTER TABLE offers ADD COLUMN {name} {coltype}")
+        have_run = {r["name"] for r in c.execute("PRAGMA table_info(runs)")}
+        for name, coltype in RUN_MIGRATIONS.items():
+            if name not in have_run:
+                c.execute(f"ALTER TABLE runs ADD COLUMN {name} {coltype}")
 
 
 def _loads(v):
@@ -161,6 +175,7 @@ def row_to_offer(r: sqlite3.Row, run: dict | None = None) -> dict:
 
 def row_to_run(r: sqlite3.Row) -> dict:
     d = dict(r)
+    d.pop("pid", None)  # détail interne (adoption après restart), pas pour l'UI
     d["files"] = _loads(d.get("files")) or {}
     m = d.get("manifest")
     d["manifest"] = _loads(m) or (json.loads(m) if m and m.strip().startswith("{") else None)
@@ -399,4 +414,17 @@ def active_run(c: sqlite3.Connection) -> dict | None:
     r = c.execute(
         "SELECT * FROM runs WHERE state IN ('queued','running') ORDER BY id ASC LIMIT 1"
     ).fetchone()
+    return row_to_run(r) if r else None
+
+
+def next_queued_run(c: sqlite3.Connection) -> dict | None:
+    """Run à lancer maintenant, ou None.
+
+    Rien tant qu'un run est `running` : les scripts de cv-tailor écrivent dans
+    `build/`, deux runs simultanés se marcheraient dessus. C'est aussi ce qui
+    empêche la file de doubler un run **adopté** après un redémarrage du hub.
+    """
+    if c.execute("SELECT 1 FROM runs WHERE state='running' LIMIT 1").fetchone():
+        return None
+    r = c.execute("SELECT * FROM runs WHERE state='queued' ORDER BY id ASC LIMIT 1").fetchone()
     return row_to_run(r) if r else None

@@ -17,6 +17,11 @@ sys.path.insert(0, str(ROOT))
 # Une base jetable AVANT d'importer db (DB_PATH lu à l'import).
 tmp = tempfile.mkdtemp(prefix="hubtest_")
 os.environ["HUB_DB"] = str(Path(tmp) / "test.db")
+# Même précaution pour les sorties : un test qui écrit ne doit jamais toucher
+# les vrais logs/, data/prompts/ ou le dossier output/ de cv-tailor.
+os.environ["HUB_LOG_DIR"] = str(Path(tmp) / "logs")
+os.environ["HUB_PROMPT_DIR"] = str(Path(tmp) / "prompts")
+os.environ["CV_OUTPUT_DIR"] = str(Path(tmp) / "output")
 
 import config  # noqa: E402
 import db  # noqa: E402
@@ -937,6 +942,101 @@ def test_ft_payload_exposed():
     check("ft_state" not in payload, "les colonnes brutes ne fuient pas dans la réponse")
 
 
+def test_run_pid_column():
+    """Le pid de l'agent est tracé : c'est ce qui permet de l'adopter après un restart."""
+    db.init_db()
+    with db.conn() as c:
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(runs)")}
+    check("pid" in cols, "colonne runs.pid migrée")
+    check("interrupted" in db.RUN_STATES, "statut interrupted déclaré")
+    with db.conn() as c:
+        oid, _ = db.upsert_offer({"url": "http://job/pid", "title": "Pid"})
+        rid = c.execute("INSERT INTO runs (offer_id, state, pid, created_at) VALUES (?,?,?,?)",
+                        (oid, "done", 4242, db.now())).lastrowid
+        rows = [db.row_to_run(r) for r in c.execute("SELECT * FROM runs WHERE id=?", (rid,))]
+    check("pid" not in rows[0], "le pid ne sort pas dans la charge API")
+
+
+def test_next_queued_run_serialised():
+    """Rien ne part tant qu'un run tourne (build/ de cv-tailor est partagé)."""
+    oid, _ = db.upsert_offer({"url": "http://job/serial", "title": "Serial"})
+    with db.conn() as c:
+        first = c.execute("INSERT INTO runs (offer_id, state, created_at) VALUES (?,?,?)",
+                          (oid, "queued", db.now())).lastrowid
+        second = c.execute("INSERT INTO runs (offer_id, state, created_at) VALUES (?,?,?)",
+                           (oid, "queued", db.now())).lastrowid
+        row = db.next_queued_run(c)
+        check(row is not None and row["id"] == first, "le premier run en file part")
+        c.execute("UPDATE runs SET state='running' WHERE id=?", (first,))
+        check(db.next_queued_run(c) is None, "file bloquée par le run en cours")
+        c.execute("UPDATE runs SET state='done' WHERE id=?", (first,))
+        row = db.next_queued_run(c)
+        check(row is not None and row["id"] == second, "la file reprend après la fin du run")
+
+
+def test_worker_pid_helpers():
+    import worker
+
+    check(worker._pid_alive(os.getpid()), "pid vivant reconnu")
+    check(not worker._pid_alive(None), "sans pid, personne n'est vivant")
+    check(not worker._pid_alive(999999), "pid mort reconnu")
+    check(not worker._is_run_process(os.getpid(), 424242),
+          "un pid recyclé n'est pas pris pour l'agent du run")
+    check(worker._started_epoch("2026-11-13T15:54:43+01:00") > 0, "started_at converti")
+    check(worker._started_epoch(None) > 0, "started_at absent : pas d'exception")
+
+
+def test_worker_recover_marks_interrupted():
+    """Agent mort pendant le restart → `interrupted`, pas `failed` : relançable."""
+    import worker
+
+    oid, _ = db.upsert_offer({"url": "http://job/interrupted", "title": "Interrompu"})
+    with db.conn() as c:
+        rid = c.execute(
+            "INSERT INTO runs (offer_id, state, pid, started_at, created_at) VALUES (?,?,?,?,?)",
+            (oid, "running", 999999, db.now(), db.now()),
+        ).lastrowid
+    worker.recover()
+    with db.conn() as c:
+        row = dict(c.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone())
+    check(row["state"] == "interrupted", f"run marqué {row['state']}")
+    check("redémarrage" in (row["error"] or ""), "la cause est écrite sur le run")
+    check(row["log_path"], "le log reste accessible après coup")
+
+
+def test_worker_recover_adopts_written_manifest():
+    """Manifest déjà écrit pendant le restart → run clôturé `done`, pas relancé."""
+    import shutil
+
+    import worker
+
+    oid, _ = db.upsert_offer({"url": "http://job/adopt", "title": "Adopté",
+                              "company": "ACME"})
+    with db.conn() as c:
+        rid = c.execute(
+            "INSERT INTO runs (offer_id, state, started_at, created_at) VALUES (?,?,?,?)",
+            (oid, "running", db.now(), db.now()),
+        ).lastrowid
+    out = config.CV_OUTPUT_DIR / f"adopt_{rid}"
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        (out / "cv_acme.pdf").write_bytes(b"%PDF-1.4")
+        (out / "manifest.json").write_text(json.dumps(
+            {"status": "ok", "files": {"cv_pdf": "cv_acme.pdf"}}), encoding="utf-8")
+        config.PROMPT_DIR.mkdir(parents=True, exist_ok=True)
+        (config.PROMPT_DIR / f"run_{rid}.txt").write_text(
+            f"- Dossier de sortie obligatoire : {out}\n", encoding="utf-8")
+        worker.recover()
+        with db.conn() as c:
+            row = dict(c.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone())
+        check(row["state"] == "done", f"run clôturé sans relance ({row['state']})")
+        check(json.loads(row["files"] or "{}").get("cv_pdf") == "cv_acme.pdf",
+              "le PDF est rattaché au run")
+        check(row["finished_at"], "le run a une date de fin")
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -951,6 +1051,8 @@ if __name__ == "__main__":
                test_stale_offers_hidden, test_ft_payload_and_message,
                test_ft_reply_and_fail_closed, test_ft_prompt_and_command,
                test_ft_trigger_on_applied, test_ft_detail_panel_assets,
-               test_ft_payload_exposed):
+               test_ft_payload_exposed, test_run_pid_column, test_next_queued_run_serialised,
+               test_worker_pid_helpers, test_worker_recover_marks_interrupted,
+               test_worker_recover_adopts_written_manifest):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

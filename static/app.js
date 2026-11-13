@@ -61,6 +61,7 @@ function runChip(o) {
     return `<span class="running"><span class="dot"></span>${r.state === 'queued' ? 'en file' : 'génération'}</span>`;
   }
   if (r && r.state === 'failed') return '<span class="running" style="color:var(--bad)">échec</span>';
+  if (r && r.state === 'interrupted') return '<span class="running" style="color:var(--warn)">interrompu</span>';
   if (r && r.files && r.files.cv_pdf) return '<span class="docs">CV + LM</span>';
   return '';
 }
@@ -539,7 +540,8 @@ function renderDrawer(o) {
     const st = run.state;
     const label = st === 'queued' ? 'en file d’attente' :
       st === 'running' ? `en cours depuis ${ago(run.started_at).replace('il y a ', '')}` :
-      st === 'done' ? `terminé ${ago(run.finished_at)}` : `échec ${ago(run.finished_at)}`;
+      st === 'done' ? `terminé ${ago(run.finished_at)}` :
+      st === 'interrupted' ? `interrompu ${ago(run.finished_at)} (relançable)` : `échec ${ago(run.finished_at)}`;
     const files = ['cv_pdf', 'lm_pdf', 'cv_docx', 'lm_docx']
       .filter((k) => run.files && run.files[k])
       .map((k) => {
@@ -580,7 +582,9 @@ function renderDrawer(o) {
       <p class="sect-title">Adaptation</p>
       <div class="files">
         <button class="btn primary" id="dTailor" ${busy ? 'disabled' : ''}>
-          ${run && run.state === 'done' ? '↻ Regénérer CV + LM' : '⚡ Adapter CV + LM'}
+          ${run && run.state === 'done' ? '↻ Regénérer CV + LM'
+            : run && run.state === 'interrupted' ? '↻ Relancer (run interrompu)'
+            : '⚡ Adapter CV + LM'}
         </button>
         ${applyButton(o)}
         ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">offre ↗</a>` : ''}
@@ -882,6 +886,7 @@ function renderOffer(o) {
     const label = run.state === 'queued' ? 'en file d’attente'
       : run.state === 'running' ? `en cours depuis ${ago(run.started_at).replace('il y a ', '')}`
       : run.state === 'done' ? `terminé ${ago(run.finished_at)}`
+      : run.state === 'interrupted' ? `interrompu ${ago(run.finished_at)} (relançable)`
       : `échec ${ago(run.finished_at)}`;
     runHtml = `
       <div class="runbox">
@@ -923,7 +928,10 @@ function renderOffer(o) {
         <div class="detail-actions">
           <label class="f">Statut<select id="oStatus">${opts}</select></label>
           <button class="btn primary" id="oTailor" ${busy ? 'disabled' : ''}>
-            ${busy ? 'en cours…' : run && run.state === 'done' ? '↻ Regénérer CV + LM' : '⚡ Adapter CV + LM'}
+            ${busy ? 'en cours…'
+              : run && run.state === 'done' ? '↻ Regénérer CV + LM'
+              : run && run.state === 'interrupted' ? '↻ Relancer (run interrompu)'
+              : '⚡ Adapter CV + LM'}
           </button>
           ${applyButton(o)}
           ${o.url ? `<a class="btn" href="${esc(o.url)}" target="_blank" rel="noopener">offre ↗</a>` : ''}
