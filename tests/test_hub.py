@@ -447,8 +447,8 @@ def test_apply_trigger_and_manual_override():
 
 def test_config_paths():
     """Aucun chemin personnel en dur : tout passe par config.py + l'environnement."""
-    sources = ["app.py", "config.py", "db.py", "files.py", "ingest.py", "linkhunt.py",
-               "worker.py",
+    sources = ["app.py", "config.py", "db.py", "files.py", "ftdemarches.py",
+               "ingest.py", "linkhunt.py", "worker.py",
                "start.sh", "scripts/issue-branch.sh"]
     offenders = []
     for name in sources:
@@ -794,6 +794,97 @@ def test_stale_offers_hidden():
           "masquer reste un filtre d'affichage : aucun appel d'écriture")
 
 
+def test_ft_payload_and_message():
+    """Les trois démarches se déduisent de l'offre, rien n'est inventé."""
+    import ftdemarches as ft
+
+    p = ft.payload({"company": "Giotto.ai", "title": "Junior ML Engineer",
+                    "applied_at": "2026-11-12T17:00:21+01:00"})
+    check(p["date"] == "12/11/2026", "date convertie au format JJ/MM/AAAA")
+    check(p["site_recherche"] == "job-hunter (mon site)", "site de recherche figé")
+    check(p["site_cv"] == "cv-tailor (mon site)", "site du CV figé")
+    msg = ft.message(p)
+    check("Giotto.ai" in msg and "Junior ML Engineer" in msg,
+          "la question Telegram porte les champs exacts")
+    check("Commentaire : vide" in msg, "le commentaire vide est annoncé")
+    check("« go »" in msg, "la question demande go / pas go")
+    for bad in ({"title": "", "company": "X", "applied_at": "2026-11-12"},
+                {"title": "T", "company": "", "applied_at": "2026-11-12"},
+                {"title": "T", "company": "X", "applied_at": ""}):
+        try:
+            ft.payload(bad)
+            raise AssertionError("offre incomplète acceptée")
+        except ft.MissingData:
+            check(True, "offre sans entreprise, métier ou date refusée")
+
+
+
+def test_ft_reply_and_fail_closed():
+    """Un go explicite ; sans bot configuré, aucune saisie (échec fermé)."""
+    import ftdemarches as ft
+
+    check(ft.parse_reply("go") == "go", "« go » reconnu")
+    check(ft.parse_reply("  GO !  ".replace("!", "")) == "go", "casse et espaces ignorés")
+    check(ft.parse_reply("Oui") == "go", "« oui » vaut go")
+    check(ft.parse_reply("non") == "no", "« non » reconnu")
+    check(ft.parse_reply("peut-être") is None, "réponse ambiguë ignorée")
+    check(ft.parse_reply(None) is None, "message vide ignoré")
+
+    oid, _ = db.upsert_offer({"url": "http://job/ft-offline", "title": "Data Scientist",
+                              "company": "Gamma"})
+    check(oid is not None, "offre de test créée")
+    check(not ft.configured(), "aucun bot Telegram dans l'environnement de test")
+    check(ft.enqueue(oid) == "blocked", "sans Telegram : bloqué, donc rien n'est écrit")
+    with db.conn() as c:
+        row = c.execute("SELECT ft_state, ft_note FROM offers WHERE id=?",
+                        (oid,)).fetchone()
+    check(row["ft_state"] == "blocked" and "Telegram" in (row["ft_note"] or ""),
+          "le blocage est tracé sur l'offre avec sa raison")
+
+
+def test_ft_prompt_and_command():
+    """Le prompt interdit de cocher Oui/Non ; la commande n'a aucun --source."""
+    import ftdemarches as ft
+
+    p = ft.payload({"company": "Giotto.ai", "title": "Junior ML Engineer",
+                    "applied_at": "2026-11-12T17:00:21+01:00"})
+    prompt = ft.build_prompt(p, Path("/tmp/ft_out.json"))
+    check("france-travail-admin" in prompt, "le prompt nomme le skill")
+    check("L'avez-vous fait" in prompt and "JAMAIS" in prompt,
+          "le prompt interdit de répondre à « L'avez-vous fait ? »")
+    check("Commentaire" in prompt and "vide" in prompt,
+          "le prompt impose un commentaire vide")
+    check(ft.SITE_RECHERCHE in prompt and ft.SITE_CV in prompt,
+          "les deux valeurs de site sont dans le prompt")
+
+    cmd = ft.build_command(Path("/tmp/ft_prompt.txt"))
+    check("--source" not in cmd, "aucun --source dans la commande d'agent")
+    check(cmd[1:6] == ["chat", "--oneshot", "-s", "france-travail-admin", "--in"],
+          "commande d'agent au format attendu")
+
+
+def test_ft_trigger_on_applied():
+    """Passer en « postulé » déclenche la demande ; une deuxième fois non."""
+    import app as app_module
+    import ftdemarches as ft
+
+    oid, _ = db.upsert_offer({"url": "http://job/ft-applied", "title": "IA Engineer",
+                              "company": "Delta"})
+    with db.conn() as c:
+        check(db.ft_state(c, oid) == "idle", "une nouvelle offre ne demande rien")
+    app_module.patch_offer(oid, app_module.OfferPatch(status="applied"))
+    with db.conn() as c:
+        check(db.ft_state(c, oid) == "blocked",
+              "passage en postulé déclenche (bloqué ici faute de bot)")
+
+    # Une offre déjà traitée ne repart pas toute seule : pas de doublon.
+    with db.conn() as c:
+        db.set_ft(c, oid, "done", note="trois démarches créées")
+    check(ft.enqueue(oid) == "done", "une offre déjà traitée n'est pas relancée")
+    check(ft.enqueue(oid, force=True) == "blocked",
+          "relance explicite possible (bouton), toujours soumise au go")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -805,6 +896,8 @@ if __name__ == "__main__":
                test_liveness_classify, test_liveness_closed_page, test_url_state_migration,
                test_check_alive_endpoint_offline, test_shortlist_check_column,
                test_shortlist_check_assets, test_gone_offers_hidden,
-               test_stale_offers_hidden):
+               test_stale_offers_hidden, test_ft_payload_and_message,
+               test_ft_reply_and_fail_closed, test_ft_prompt_and_command,
+               test_ft_trigger_on_applied):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")
