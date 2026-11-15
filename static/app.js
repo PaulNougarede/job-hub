@@ -17,6 +17,8 @@ const state = {
   view: 'new', openId: null, logTimer: null, boardTimer: null,
   offerId: null, offerTimer: null, tabs: [], lastView: '#/nouvelles',
   showGone: false,   // les annonces marquées « disparue » sont masquées par défaut
+  // ordre de la vue Nouvelles : 'score' (défaut) ou 'date' d'arrivée
+  newSort: (localStorage.getItem('jobhunter.newSort') === 'date' ? 'date' : 'score'),
   alive: null        // lot de vérification en cours : { status, startedAt, since, ingested }
 };
 
@@ -358,11 +360,32 @@ function cardPipe(o) {
   </article>`;
 }
 
+/* Ordre de la vue Nouvelles. Tri purement client : aucune requête, aucune
+   écriture. Un run d'ingestion pose le même found_at à la seconde près pour
+   toutes ses annonces, d'où le départage par score puis par id — sans lui
+   l'ordre changerait d'un rendu à l'autre. */
+const NEW_SORT_LABELS = { score: 'score', date: 'date d’arrivée' };
+function foundMs(o) {
+  const t = Date.parse(o.found_at || '');
+  return Number.isFinite(t) ? t : 0;
+}
+function sortNewOffers(items, mode) {
+  const byScore = (a, b) => (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score);
+  const byDate = (a, b) => foundMs(b) - foundMs(a);
+  const byId = (a, b) => b.id - a.id;
+  const cmp = mode === 'date'
+    ? (a, b) => byDate(a, b) || byScore(a, b) || byId(a, b)
+    : (a, b) => byScore(a, b) || byDate(a, b) || byId(a, b);
+  return items.slice().sort(cmp);
+}
+
 function renderNew() {
   const all = state.offers.filter((o) => o.status === 'new' && matches(o));
   const expired = all.filter(isExpired);
-  const items = state.showGone ? all : all.filter((o) => !isExpired(o));
+  const items = sortNewOffers(
+    state.showGone ? all : all.filter((o) => !isExpired(o)), state.newSort);
   const el = $('#gridNew');
+  $('#sortNew').value = state.newSort;
 
   // Le basculement n'apparaît que s'il y a quelque chose à révéler.
   const toggle = $('#toggleGone');
@@ -374,7 +397,8 @@ function renderNew() {
   const hidden = state.showGone ? 0 : expired.length;
   const plural = (n) => (n > 1 ? 's' : '');
   $('#newHint').textContent = items.length
-    ? `${items.length} offre${items.length > 1 ? 's' : ''} · triées par score`
+    ? `${items.length} offre${items.length > 1 ? 's' : ''} · triées par `
+      + (NEW_SORT_LABELS[state.newSort] || 'score')
       + (hidden ? ` · ${hidden} expirée${plural(hidden)} masquée${plural(hidden)}` : '')
     : (hidden
         ? `aucune annonce vivante · ${hidden} expirée${plural(hidden)} masquée${plural(hidden)}`
@@ -1102,6 +1126,11 @@ document.addEventListener('keydown', (e) => {
 });
 $('#q').addEventListener('input', (e) => { state.q = e.target.value.trim(); render(); });
 $('#toggleGone').onclick = () => { state.showGone = !state.showGone; renderNew(); };
+$('#sortNew').onchange = (e) => {
+  state.newSort = e.target.value === 'date' ? 'date' : 'score';
+  localStorage.setItem('jobhunter.newSort', state.newSort);
+  renderNew();
+};
 $('#refresh').onclick = async () => {
   await fetch('/api/ingest', { method: 'POST' });
   await load();
