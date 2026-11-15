@@ -1037,6 +1037,34 @@ def test_worker_recover_adopts_written_manifest():
         shutil.rmtree(out, ignore_errors=True)
 
 
+def test_new_offers_sort_assets():
+    """La vue Nouvelles sait s'ordonner par date d'arrivée, sans écriture."""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    new_view = js.split("function renderNew")[1].split("function renderPipeline")[0]
+    sorter = js.split("const NEW_SORT_LABELS")[1].split("function renderNew")[0]
+
+    check('id="sortNew"' in html, "index.html porte le sélecteur d'ordre")
+    check('value="score"' in html and 'value="date"' in html,
+          "les deux ordres sont proposés : score et date")
+    check('jobhunter.newSort' in js, "le choix est mémorisé")
+    check("=== 'date' ? 'date' : 'score'" in js,
+          "un ordre inconnu retombe sur le score")
+    check("sortNewOffers(" in new_view, "renderNew passe par le tri")
+    check("found_at" in sorter, "le tri par date lit found_at")
+    check("byDate(a, b) || byScore(a, b) || byId(a, b)" in sorter,
+          "date : départage score puis id (même horodatage à la seconde)")
+    check("byScore(a, b) || byDate(a, b) || byId(a, b)" in sorter,
+          "score : départage date puis id")
+    check("mode === 'date'" in sorter and "score" in sorter,
+          "le mode par défaut reste le score")
+    check("items.slice().sort(cmp)" in sorter, "le tri ne modifie pas la liste reçue")
+    check("NEW_SORT_LABELS" in new_view, "le texte d'aide annonce l'ordre courant")
+    check("/api/offers" not in sorter and "fetch(" not in sorter,
+          "tri client : aucune requête")
+    check("$('#sortNew').onchange" in js, "le sélecteur est câblé")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -1053,6 +1081,7 @@ if __name__ == "__main__":
                test_ft_trigger_on_applied, test_ft_detail_panel_assets,
                test_ft_payload_exposed, test_run_pid_column, test_next_queued_run_serialised,
                test_worker_pid_helpers, test_worker_recover_marks_interrupted,
-               test_worker_recover_adopts_written_manifest):
+               test_worker_recover_adopts_written_manifest,
+               test_new_offers_sort_assets):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

@@ -44,7 +44,13 @@
     <div class="toolbar">
       <div class="toolbar-title">
         <h2>Nouvelles offres</h2>
-        <span class="hint" id="newHint">triées par score, les plus récentes d'abord</span>
+        <span class="hint" id="newHint">triées par score</span>
+        <label class="sortpick" title="Ordre d'affichage des nouvelles offres">trier par
+          <select id="sortNew">
+            <option value="score">score</option>
+            <option value="date">date d'arrivée</option>
+          </select>
+        </label>
         <button class="btn small ghost" id="checkAlive"
                 title="Relire inbox.jsonl et vérifier que chaque offre répond encore">↻ Rafraîchir + vérifier</button>
         <button class="btn small ghost" id="toggleGone" hidden>afficher les expirées</button>
