@@ -282,10 +282,25 @@ def parse_result(out_path: Path, log_text: str) -> dict:
             "note": str(data.get("note") or "")}
 
 
+def launch_failure(code: int | None, log_text: str) -> str:
+    """Raison lisible d'un run mort sans JSON : la dernière ligne du log du CLI.
+
+    Sans ça, un flag refusé par `hermes chat` ne laisse que « aucun résultat
+    JSON exploitable », qui ne dit pas pourquoi rien n'a démarré.
+    """
+    tail = [ln.strip() for ln in (log_text or "").splitlines() if ln.strip()]
+    detail = tail[-1][:200] if tail else "aucune sortie"
+    return f"agent sorti en code {code} sans résultat : {detail}"
+
+
 def build_command(prompt_path: Path) -> list[str]:
-    """Commande d'agent. Aucun `--source` : le gateway le refuserait."""
-    return [HERMES, "chat", "--oneshot", "-s", "france-travail-admin",
-            "--in", str(prompt_path)]
+    """Commande d'agent. Aucun `--source` : le gateway le refuserait.
+
+    Le prompt se transmet par `--query-file` ; `--in` attend un répertoire et
+    rejetterait un chemin de fichier avant le premier appel modèle.
+    """
+    return [HERMES, "chat", "--query-file", str(prompt_path), "--oneshot",
+            "-s", "france-travail-admin"]
 
 
 def _run_one(offer: dict) -> None:
@@ -327,13 +342,14 @@ def _run_one(offer: dict) -> None:
 
     cmd = build_command(prompt_path)
     error = None
+    code = None
     try:
         with log_path.open("w", encoding="utf-8") as log:
             log.write(f"$ {' '.join(cmd)}\n\n")
             log.flush()
-            subprocess.run(cmd, cwd=str(config.BASE_DIR), stdout=log,
-                           stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                           timeout=BUDGET + 120)
+            code = subprocess.run(cmd, cwd=str(config.BASE_DIR), stdout=log,
+                                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                  timeout=BUDGET + 120).returncode
     except subprocess.TimeoutExpired:
         error = f"timeout après {BUDGET + 120}s"
     except Exception as e:  # pragma: no cover
@@ -343,6 +359,11 @@ def _run_one(offer: dict) -> None:
     result = parse_result(out_path, log_text)
     if error:
         result = {"status": "failed", "demarches": [], "skipped": [], "note": error}
+    elif not out_path.exists() and code:
+        # Sans JSON et sortie non nulle, le CLI a refusé le lancement : sa
+        # dernière ligne de log explique pourquoi (flag invalide, gateway…).
+        result = {"status": "failed", "demarches": [], "skipped": [],
+                  "note": launch_failure(code, log_text)}
 
     with db.conn() as c:
         if db.ft_state(c, offer_id) != "filling":
