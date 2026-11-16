@@ -871,8 +871,25 @@ def test_ft_prompt_and_command():
 
     cmd = ft.build_command(Path("/tmp/ft_prompt.txt"))
     check("--source" not in cmd, "aucun --source dans la commande d'agent")
-    check(cmd[1:6] == ["chat", "--oneshot", "-s", "france-travail-admin", "--in"],
-          "commande d'agent au format attendu")
+    check(cmd[1:3] == ["chat", "--query-file"], f"commande inattendue : {cmd[:3]}")
+    check(cmd[cmd.index("--query-file") + 1].endswith("ft_prompt.txt"),
+          "--query-file porte le prompt")
+    check("--oneshot" in cmd, "--oneshot présent")
+    check(cmd[cmd.index("-s") + 1] == "france-travail-admin", "skill France Travail chargé")
+    # `--in` attend un répertoire : le passer sur un fichier de prompt tue le run
+    # avant le premier appel modèle (incident #62). Tout `--in` doit en être un.
+    if "--in" in cmd:
+        check(Path(cmd[cmd.index("--in") + 1]).is_dir(),
+              "--in ne pointe que sur un répertoire existant")
+
+    # Un run mort sans JSON doit dire pourquoi : la dernière ligne du CLI.
+    log = ("$ hermes chat --oneshot -s france-travail-admin --in /x/prompt.txt\n\n"
+           "Error: --in directory not found: /x/prompt.txt\n")
+    note = ft.launch_failure(1, log)
+    check("code 1" in note and "--in directory not found" in note,
+          f"l'échec de lancement cite la cause du CLI : {note}")
+    check(ft.launch_failure(1, "").endswith("aucune sortie"),
+          "log vide : pas de trace vide dans la note")
 
 
 def test_ft_trigger_on_applied():
