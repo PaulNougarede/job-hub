@@ -84,6 +84,7 @@ Toutes les valeurs sont optionnelles et calculées au chargement par `config.py`
 | `HUB_PROMPT_DIR` | `data/prompts/` | prompt exact envoyé à l'agent |
 | `CV_TAILOR_DIR` | `$HOME/cv-tailor` | dépôt d'adaptation CV |
 | `CV_OUTPUT_DIR` | `$CV_TAILOR_DIR/output` | fichiers servis par `/files/` |
+| `CV_MASTER_DIR` | `$CV_TAILOR_DIR/master/out` | CV de référence (version longue), bouton de l'en-tête |
 | `HUB_INBOX` | `$HOME/job-hunter/inbox.jsonl` | entrée de la veille |
 | `HUB_SENT_LOG` | `sent.jsonl` à côté de l'inbox | variante d'entrée |
 | `HUB_HERMES_BIN` | `hermes` dans le `PATH` | agent lancé par le worker |
@@ -114,7 +115,9 @@ l'application.
   manifest vérifié après coup, et rien n'est envoyé automatiquement — c'est moi
   qui postule.
 - **Service de fichiers borné** : `GET /files/{path}` résout le chemin puis
-  refuse tout ce qui sort de `CV_OUTPUT_DIR` (test de régression dédié).
+  refuse tout ce qui sort de `CV_OUTPUT_DIR` (test de régression dédié). Le CV
+  de référence (`GET /api/reference-cv/{kind}`) suit la même règle dans
+  `CV_MASTER_DIR` : seuls les enfants directs du dossier sont servis.
 
 Un problème de sécurité se signale par une issue, en privé si la divulgation
 publique pose problème.

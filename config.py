@@ -33,6 +33,11 @@ PROMPT_DIR = _path("HUB_PROMPT_DIR", BASE_DIR / "data" / "prompts")
 CV_TAILOR_DIR = _path("CV_TAILOR_DIR", HOME / "cv-tailor")
 CV_OUTPUT_DIR = _path("CV_OUTPUT_DIR", CV_TAILOR_DIR / "output")
 
+# CV de référence (version longue, écrite à la main puis rendue par cv-tailor).
+# Il vit hors de `output/` : ce n'est pas la pièce d'une candidature, c'est le
+# document que Paul envoie quand un recruteur demande le détail de ses missions.
+CV_MASTER_DIR = _path("CV_MASTER_DIR", CV_TAILOR_DIR / "master" / "out")
+
 # --- Entrées produites par le cron de veille ------------------------------
 INBOX_PATH = _path("HUB_INBOX", HOME / "job-hunter" / "inbox.jsonl")
 SENT_LOG_PATH = _path("HUB_SENT_LOG", INBOX_PATH.with_name("sent.jsonl"))

@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +23,8 @@ os.environ["HUB_DB"] = str(Path(tmp) / "test.db")
 os.environ["HUB_LOG_DIR"] = str(Path(tmp) / "logs")
 os.environ["HUB_PROMPT_DIR"] = str(Path(tmp) / "prompts")
 os.environ["CV_OUTPUT_DIR"] = str(Path(tmp) / "output")
+# Le CV de référence ne doit pas être lu depuis le vrai master/out/ pendant les tests.
+os.environ["CV_MASTER_DIR"] = str(Path(tmp) / "master_out")
 
 import config  # noqa: E402
 import db  # noqa: E402
@@ -1082,6 +1085,79 @@ def test_new_offers_sort_assets():
     check("$('#sortNew').onchange" in js, "le sélecteur est câblé")
 
 
+def test_reference_cv():
+    """CV de référence : résolution des fichiers de master/out/ et garde-fous."""
+    import files as docfiles
+
+    root = Path(tmp) / "master_out"
+    root.mkdir(parents=True, exist_ok=True)
+    check(docfiles.reference_docs(root) == [], "dossier vide → aucun format")
+    check(docfiles.reference_doc(root, "cv_pdf") is None, "PDF absent → None")
+    check(docfiles.reference_doc(root, "inconnu") is None, "type inconnu refusé")
+    check(docfiles.reference_docs(Path(tmp) / "nope") == [],
+          "dossier absent → liste vide, le hub tourne sans cv-tailor")
+
+    pdf = root / "CV_Paul_Nougarède_detail_FR.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    docx = root / "CV_Paul_Nougarède_detail_FR.docx"
+    docx.write_bytes(b"PK")
+    (root / "notes.txt").write_text("x", encoding="utf-8")
+
+    check(docfiles.reference_doc(root, "cv_pdf") == pdf.resolve(), "PDF résolu")
+    check(docfiles.reference_doc(root, "cv_docx") == docx.resolve(), "Word résolu")
+    docs = docfiles.reference_docs(root)
+    check([d["kind"] for d in docs] == ["cv_pdf", "cv_docx"], f"les deux formats : {docs}")
+    check([d["filename"] for d in docs] == [pdf.name, docx.name],
+          "le nom d'origine est conservé (téléchargement parlant)")
+    check(docs[0]["size"] == len(b"%PDF-1.4"), "taille annoncée = taille du fichier")
+    check(all("label" in d and "ext" in d for d in docs), "chaque entrée porte son libellé et son extension")
+
+    newer = root / "CV_Paul_Nougarède_detail_FR_v2.pdf"
+    newer.write_bytes(b"%PDF-1.5")
+    stamp = time.time() + 5
+    os.utime(newer, (stamp, stamp))
+    check(docfiles.reference_doc(root, "cv_pdf") == newer.resolve(),
+          "le rendu le plus récent est servi")
+
+    outside = Path(tmp) / "ailleurs.pdf"
+    outside.write_bytes(b"%PDF-1.6")
+    (root / "evil.pdf").symlink_to(outside)
+    got = docfiles.reference_doc(root, "cv_pdf")
+    check(got is None or got.is_relative_to(root.resolve()),
+          "un lien qui sort du dossier n'est jamais servi")
+    (root / "evil.pdf").unlink()
+
+
+def test_reference_cv_assets():
+    """Le bouton du CV de référence est câblé côté écran et côté API."""
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    app_src = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    check('id="refCvBox"' in html, "l'en-tête porte la boîte du CV de référence")
+    check("hidden" in html.split('id="refCvBox"')[0].split("<")[-1] + html.split('id="refCvBox"')[1].split(">")[0],
+          "elle est masquée par défaut (aucun fichier annoncé)")
+    check('id="refCvMenu"' in html, "le menu qui liste les formats existe")
+    check("summary" in html and "CV ⤓" in html, "le bouton s'appelle CV ⤓")
+
+    check("fetch('/api/reference-cv')" in js, "l'écran interroge la liste des formats")
+    check("/api/reference-cv/${encodeURIComponent(f.kind)}" in js,
+          "le téléchargement passe par la route dédiée")
+    check('download="${f.filename}"' in js, "le nom de fichier est forcé au téléchargement")
+    check("box.hidden = true" in js, "aucun fichier → bouton masqué (pas de bouton mort)")
+    check("loadReferenceCv()" in js.split("state.tabs = loadTabs()")[1],
+          "le chargement est déclenché au démarrage")
+
+    check(".refcv-menu" in css, "le menu est mis en forme dans la charte")
+    check("position: absolute" in css.split(".refcv-menu {")[1].split("}")[0],
+          "le menu se superpose au board au lieu de pousser l'en-tête")
+
+    check('@app.get("/api/reference-cv")' in app_src, "route de liste exposée")
+    check('@app.get("/api/reference-cv/{kind}")' in app_src, "route de téléchargement exposée")
+    check("reference_doc(CV_MASTER, kind)" in app_src, "le téléchargement passe par le garde-fou de files.py")
+
+
 if __name__ == "__main__":
     for fn in (test_schema, test_norm_variants, test_upsert_dedup, test_status_flow,
                test_inbox_ingest, test_tombstone, test_delete_offer, test_file_guard,
@@ -1099,6 +1175,7 @@ if __name__ == "__main__":
                test_ft_payload_exposed, test_run_pid_column, test_next_queued_run_serialised,
                test_worker_pid_helpers, test_worker_recover_marks_interrupted,
                test_worker_recover_adopts_written_manifest,
-               test_new_offers_sort_assets):
+               test_new_offers_sort_assets, test_reference_cv,
+               test_reference_cv_assets):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

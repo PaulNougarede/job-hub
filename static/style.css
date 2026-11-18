@@ -240,6 +240,27 @@ header {
 .btn.ghost:hover { background: rgba(44, 44, 44, .05); color: var(--ink); border-color: transparent; box-shadow: none; }
 .btn.icon { padding: 5px 9px; font-size: 14px; color: var(--muted); }
 .btn.icon:hover { color: var(--ink); }
+
+/* CV de référence : menu de l'en-tête, visible depuis toutes les vues. */
+.refcv { position: relative; }
+.refcv > summary { list-style: none; white-space: nowrap; }
+.refcv > summary::-webkit-details-marker { display: none; }
+.refcv > summary::marker { content: ""; }
+.refcv[open] > summary { background: rgba(44, 44, 44, .07); color: var(--ink); }
+.refcv-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  min-width: 258px; padding: 4px;
+  background: var(--paper-card); border: 1px solid var(--line-mid); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(59, 54, 48, .14);
+}
+.refcv-menu a {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  padding: 7px 9px; border-radius: 7px;
+  color: var(--ink); font-size: 12.5px; text-decoration: none;
+}
+.refcv-menu a:hover { background: rgba(44, 44, 44, .05); text-decoration: none; }
+.refcv-menu a > span:first-child { white-space: nowrap; }
+.refcv-menu .sz { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .btn:disabled { opacity: .45; cursor: default; box-shadow: none; }
 .btn.adapt { border-color: rgba(51, 105, 138, .45); color: var(--blue-deep); background: var(--blue-soft); }
 .btn.adapt:hover { background: #D2E4EF; }

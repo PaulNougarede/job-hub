@@ -22,6 +22,13 @@ DOC_KINDS = {
 RESEARCH_NAME = "company_research.md"
 RESEARCH_MAX = 200_000  # au-delà, on tronque : le hub ne rend pas un roman
 
+# CV de référence : les deux formats du CV maître, servis depuis `master/out/`.
+# Distincts de DOC_KINDS, qui décrit les pièces d'une candidature donnée.
+REFERENCE_KINDS = {
+    "cv_pdf": ("CV de référence (PDF)", "pdf"),
+    "cv_docx": ("CV de référence (Word)", "docx"),
+}
+
 
 def slug(value: str | None, maxlen: int = 40) -> str:
     """ASCII, sans accent ni espace : un nom de fichier qui survit à un Mac."""
@@ -67,6 +74,55 @@ def documents(out_dir: str | Path | None, files: dict | None,
             "label": DOC_KINDS[kind][0],
             "ext": DOC_KINDS[kind][1],
             "filename": doc_filename(kind, company, day),
+            "size": path.stat().st_size,
+        })
+    return out
+
+
+def _reference_candidate(root: str | Path | None, ext: str) -> Path | None:
+    """Fichier du CV maître pour cette extension, ou None.
+
+    Le dossier peut contenir plusieurs rendus (archives, essais) : on prend le
+    plus récent, en préférant un nom qui commence par `CV`. Aucun chemin n'est
+    déduit de l'extérieur : on ne liste que des enfants directs de `root`.
+    """
+    if not root:
+        return None
+    root_p = Path(root).resolve()
+    if not root_p.is_dir():
+        return None
+    try:
+        found = [p.resolve() for p in root_p.iterdir()
+                 if p.is_file() and p.suffix.lower() == "." + ext]
+    except OSError:
+        return None
+    found = [p for p in found if p.is_relative_to(root_p)]
+    if not found:
+        return None
+    cv = [p for p in found if p.name.lower().startswith("cv")]
+    pool = cv or found
+    return max(pool, key=lambda p: (p.stat().st_mtime, p.name))
+
+
+def reference_doc(root: str | Path | None, kind: str) -> Path | None:
+    """Chemin du CV de référence demandé (`cv_pdf` ou `cv_docx`), ou None."""
+    if kind not in REFERENCE_KINDS:
+        return None
+    return _reference_candidate(root, REFERENCE_KINDS[kind][1])
+
+
+def reference_docs(root: str | Path | None) -> list[dict]:
+    """Formats du CV de référence réellement présents, prêts à afficher."""
+    out = []
+    for kind, (label, ext) in REFERENCE_KINDS.items():
+        path = reference_doc(root, kind)
+        if not path:
+            continue
+        out.append({
+            "kind": kind,
+            "label": label,
+            "ext": ext,
+            "filename": path.name,
             "size": path.stat().st_size,
         })
     return out

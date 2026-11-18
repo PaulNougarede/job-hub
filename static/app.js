@@ -1234,7 +1234,39 @@ window.addEventListener('hashchange', () => {
   if (state.view !== view) stopAliveCheck();
 });
 
+// CV de référence (version longue) : bouton de l'en-tête, masqué si le serveur
+// n'annonce aucun fichier. Ce document n'appartient à aucune candidature.
+function referenceCvHtml(files) {
+  return files.map((f) => {
+    const ext = (f.ext || '').toUpperCase();
+    return `<a href="/api/reference-cv/${encodeURIComponent(f.kind)}" download="${f.filename}">
+      <span>${f.label || ext}</span>
+      <span class="sz">${fmtSize(f.size)} · ${ext}</span>
+    </a>`;
+  }).join('');
+}
+
+async function loadReferenceCv() {
+  const box = $('#refCvBox');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/reference-cv');
+    const d = await r.json();
+    const files = (d && d.files) || [];
+    if (!files.length) { box.hidden = true; return; }
+    $('#refCvMenu').innerHTML = referenceCvHtml(files);
+    box.hidden = false;
+    // Un clic ailleurs referme le menu : <details> ne le fait pas seul.
+    document.addEventListener('click', (e) => {
+      if (box.open && !box.contains(e.target)) box.open = false;
+    });
+  } catch (e) {
+    box.hidden = true;
+  }
+}
+
 state.tabs = loadTabs();
 route();
 loadSites();
 load();
+loadReferenceCv();
