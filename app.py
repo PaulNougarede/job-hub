@@ -32,6 +32,7 @@ import worker
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 CV_OUTPUT = config.CV_OUTPUT_DIR
+CV_MASTER = config.CV_MASTER_DIR
 INBOX = config.INBOX_PATH
 
 
@@ -148,6 +149,7 @@ def health():
         "db": db.DB_PATH.name,
         "db_ready": db.DB_PATH.exists(),
         "cv_output_ready": CV_OUTPUT.is_dir(),
+        "reference_cv_ready": CV_MASTER.is_dir(),
     }
 
 
@@ -204,6 +206,32 @@ def offer_document(oid: int, kind: str, inline: bool = False):
     return FileResponse(
         target, media_type="application/pdf" if name.endswith(".pdf") else None,
         headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+@app.get("/api/reference-cv")
+def reference_cv():
+    """CV de référence (version longue) : formats présents dans master/out/."""
+    docs = docfiles.reference_docs(CV_MASTER)
+    return {"files": docs, "total": len(docs)}
+
+
+@app.get("/api/reference-cv/{kind}")
+def reference_cv_file(kind: str, inline: bool = False):
+    """Télécharge le CV de référence sous son vrai nom (CV_Paul_..._detail_FR.pdf).
+
+    Distinct de /api/offers/<id>/doc/<kind> : ce document n'appartient à aucune
+    candidature, il est servi depuis `CV_MASTER_DIR` avec le même garde-fou.
+    """
+    target = docfiles.reference_doc(CV_MASTER, kind)
+    if not target:
+        raise HTTPException(404, "CV de référence introuvable")
+    if not inline:
+        return FileResponse(target, filename=target.name)
+    media = "application/pdf" if target.suffix.lower() == ".pdf" else None
+    return FileResponse(
+        target, media_type=media,
+        headers={"Content-Disposition": f'inline; filename="{target.name}"'},
     )
 
 
