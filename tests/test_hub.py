@@ -1151,11 +1151,53 @@ def test_reference_cv_assets():
 
     check(".refcv-menu" in css, "le menu est mis en forme dans la charte")
     check("position: absolute" in css.split(".refcv-menu {")[1].split("}")[0],
-          "le menu se superpose au board au lieu de pousser l'en-tête")
+          "grand écran : le menu se superpose au board au lieu de pousser l'en-tête")
 
     check('@app.get("/api/reference-cv")' in app_src, "route de liste exposée")
     check('@app.get("/api/reference-cv/{kind}")' in app_src, "route de téléchargement exposée")
     check("reference_doc(CV_MASTER, kind)" in app_src, "le téléchargement passe par le garde-fou de files.py")
+
+def test_phone_layout_and_download_assets():
+    """Sur téléphone : fichiers lisibles, menu contenu, téléchargement réel.
+
+    Un <a download> seul ne suffit pas : un iPhone en PWA plein écran affiche le
+    PDF et n'offre aucune sauvegarde. Les liens passent par downloadDoc().
+    """
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+    mobile = css.split("@media (max-width: 820px)")[1]
+
+    n = js.count('data-download=')
+    check(n >= 3, f"les trois familles de liens de document passent par le gestionnaire ({n})")
+    check('href="/api/offers/${o.id}/doc/${d.kind}"\n         data-download' in js,
+          "lien du panneau Documents")
+    check("data-download=\"${esc((run.files || {})[k] || '')}\"" in js,
+          "liens de la boîte Génération")
+    check('data-download="${esc(f.filename)}"' in js, "lien du CV de référence")
+
+    check("function downloadDoc(url, fallbackName)" in js, "le téléchargement a un gestionnaire unique")
+    check("filenameFromDisposition" in js, "le nom de fichier se replie sur Content-Disposition")
+    check("window.navigator.standalone === true" in js and "navigator.canShare" in js,
+          "iPhone en PWA : partage natif, seule écriture réelle sur l'appareil")
+    check("URL.createObjectURL(blob)" in js and "a.download = name" in js,
+          "ailleurs : ancre blob + download")
+    check("URL.revokeObjectURL(href)" in js, "l'URL objet est libérée")
+    check("document.addEventListener('click'" in js and "a[data-download]" in js,
+          "la délégation intercepte les liens de document")
+    check("if (box) box.open = false" in js, "le menu se referme après le clic")
+
+    check(".doc .name { flex-basis: 100%; order: 0;" in mobile,
+          "mobile : le nom du fichier passe au-dessus de ses boutons")
+    check(".doc .ext { order: 1; }" in mobile and ".doc .btn { order: 3; }" in mobile,
+          "mobile : métadonnées et boutons restent groupés sous le nom")
+    check(".detail-actions > :last-child { grid-column: 1 / -1; }" in mobile,
+          "mobile : le bouton « offre » occupe la ligne au lieu d'une colonne vide")
+    check(".refcv-menu {\n    position: static;" in mobile,
+          "mobile : le menu CV cesse d'être positionné hors écran")
+    check(".refcv[open] { flex-basis: 100%; order: 10; }" in mobile,
+          "mobile : le menu ouvert prend sa propre ligne dans l'en-tête")
+    check("min-width: 258px" in css, "le menu garde sa largeur sur grand écran")
 
 
 if __name__ == "__main__":
@@ -1176,6 +1218,6 @@ if __name__ == "__main__":
                test_worker_pid_helpers, test_worker_recover_marks_interrupted,
                test_worker_recover_adopts_written_manifest,
                test_new_offers_sort_assets, test_reference_cv,
-               test_reference_cv_assets):
+               test_reference_cv_assets, test_phone_layout_and_download_assets):
         fn()
     print(f"\nALL TESTS PASSED ({PASS} vérifications)")

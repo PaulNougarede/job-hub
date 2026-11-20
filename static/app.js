@@ -570,7 +570,8 @@ function renderDrawer(o) {
       .filter((k) => run.files && run.files[k])
       .map((k) => {
         const name = { cv_pdf: 'CV (PDF)', lm_pdf: 'Lettre (PDF)', cv_docx: 'CV (DOCX)', lm_docx: 'Lettre (DOCX)' }[k];
-        return `<a class="btn small" href="/api/offers/${o.id}/doc/${k}">${name}</a>`;
+        return `<a class="btn small" href="/api/offers/${o.id}/doc/${k}"
+                   data-download="${esc((run.files || {})[k] || '')}">${name}</a>`;
       }).join('');
     const m = run.manifest || {};
     const summary = m.company_summary
@@ -831,6 +832,53 @@ function applyPanel(o) {
     </div>`;
 }
 
+/* Télécharger un document. Un simple <a download> ne suffit pas sur téléphone :
+   un iPhone en PWA plein écran ignore l'attribut et se contente d'afficher le
+   PDF, sans aucune sauvegarde possible. On récupère donc le fichier en mémoire
+   puis on choisit la voie qui écrit vraiment sur l'appareil. */
+function filenameFromDisposition(cd) {
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd || '');
+  if (!m) return '';
+  try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+}
+
+async function downloadDoc(url, fallbackName) {
+  let resp;
+  try {
+    resp = await fetch(url, { credentials: 'same-origin' });
+  } catch (e) {
+    window.location.href = url;   // réseau capricieux : laisser le navigateur essayer
+    return;
+  }
+  if (!resp.ok) { toast('Téléchargement impossible (' + resp.status + ')'); return; }
+  const blob = await resp.blob();
+  const name = fallbackName || filenameFromDisposition(resp.headers.get('content-disposition')) || 'document';
+  const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+
+  // iPhone installé sur l'écran d'accueil : pas de gestionnaire de
+  // téléchargement, seul le partage natif écrit dans Fichiers.
+  const iosStandalone = window.navigator.standalone === true;
+  if (iosStandalone && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: name });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // l'utilisateur a fermé le partage
+    }
+  }
+
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 60000);
+  toast('Téléchargé · ' + name);
+}
+
 function docRow(o, d) {
   return `
     <div class="doc">
@@ -838,6 +886,7 @@ function docRow(o, d) {
       <span class="name" title="${esc(d.filename)}">${esc(d.label)}</span>
       <span class="size">${fmtSize(d.size)}</span>
       <a class="btn small" href="/api/offers/${o.id}/doc/${d.kind}"
+         data-download="${esc(d.filename)}"
          title="télécharger ${esc(d.filename)}">↓ télécharger</a>
       ${d.ext === 'pdf' ? `<a class="btn small ghost"
           href="/api/offers/${o.id}/doc/${d.kind}?inline=true" target="_blank"
@@ -1125,6 +1174,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { closeDrawer(); closeModal(); }
 });
 $('#q').addEventListener('input', (e) => { state.q = e.target.value.trim(); render(); });
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-download]');
+  if (!a) return;
+  e.preventDefault();
+  const box = a.closest('details');
+  if (box) box.open = false;
+  downloadDoc(a.href, a.dataset.download || '');
+});
 $('#toggleGone').onclick = () => { state.showGone = !state.showGone; renderNew(); };
 $('#sortNew').onchange = (e) => {
   state.newSort = e.target.value === 'date' ? 'date' : 'score';
@@ -1239,7 +1296,8 @@ window.addEventListener('hashchange', () => {
 function referenceCvHtml(files) {
   return files.map((f) => {
     const ext = (f.ext || '').toUpperCase();
-    return `<a href="/api/reference-cv/${encodeURIComponent(f.kind)}" download="${f.filename}">
+    return `<a href="/api/reference-cv/${encodeURIComponent(f.kind)}" download="${f.filename}"
+              data-download="${esc(f.filename)}">
       <span>${f.label || ext}</span>
       <span class="sz">${fmtSize(f.size)} · ${ext}</span>
     </a>`;
