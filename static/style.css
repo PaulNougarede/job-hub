@@ -669,8 +669,23 @@ textarea { resize: vertical; min-height: 80px; font-family: var(--font-ui); font
   }
   .detail-actions label.f { grid-column: 1 / -1; width: auto; }
   .detail-actions .btn { justify-content: center; }
-  .doc { flex-wrap: wrap; }
-  .doc .name { flex-basis: 100%; order: 3; }
+  /* Documents : le nom passe au-dessus, ses boutons restent groupés en dessous.
+     Avant, le nom était renvoyé seul sous la ligne de boutons et ressemblait à
+     une étiquette orpheline. */
+  .doc { flex-wrap: wrap; row-gap: 6px; }
+  .doc .name { flex-basis: 100%; order: 0; white-space: normal; }
+  .doc .ext { order: 1; }
+  .doc .size { order: 2; }
+  .doc .btn { order: 3; }
+  /* le troisième bouton (offre ↗) ne doit pas rester seul dans une colonne */
+  .detail-actions > :last-child { grid-column: 1 / -1; }
+  /* Menu du CV de référence : en position absolue il sortait de l'écran à
+     gauche. Sur mobile il devient un bloc pleine largeur, dans le flux. */
+  .refcv[open] { flex-basis: 100%; order: 10; }
+  .refcv-menu {
+    position: static; width: auto; min-width: 0; margin: 6px 0 2px;
+    box-shadow: none; border-color: var(--line-soft);
+  }
 }
 
 /* ---------- modal ---------- */
